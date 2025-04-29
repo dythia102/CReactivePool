@@ -75,7 +75,9 @@ static void acquire_callback(void* object, void* context) {
     if (!object || !context) return; // Guard against invalid inputs
     data->callback_count++;
     data->last_object = (Message*)object;
-    data->last_object->id = *(int*)context;
+    if (data->context_id) {
+        data->last_object->id = *(data->context_id);
+    }
 }
 
 int test_count = 0;
@@ -245,19 +247,35 @@ int main() {
     // Test 11: Backpressure
     acquire_test_data_t acquire_data = {0};
     int callback_id = 5;
-    for (size_t i = 0; i < 6; i++) {
-        pool_acquire(pool, acquire_callback, &callback_id);
+    acquire_data.context_id = &callback_id;
+    // Explicitly exhaust the pool
+    Message* held_objects[4];
+    for (size_t i = 0; i < 4; i++) {
+        held_objects[i] = pool_acquire(pool, NULL, NULL);
+        assert_true("Exhaust pool for backpressure", held_objects[i] != NULL);
+    }
+    // Enqueue backpressure requests
+    for (size_t i = 0; i < 2; i++) {
+        pool_acquire(pool, acquire_callback, &acquire_data);
     }
     assert_true("Backpressure queue", acquire_data.callback_count == 0);
-    new_msg = pool_acquire(pool, NULL, NULL);
-    if (new_msg) {
-        pool_release(pool, new_msg);
+    // Release one object to trigger callback
+    if (held_objects[0]) {
+        pool_release(pool, held_objects[0]);
+        held_objects[0] = NULL;
     }
     assert_true("Backpressure callback", acquire_data.callback_count == 1 && acquire_data.last_object != NULL);
     assert_true("Backpressure object", acquire_data.last_object->id == callback_id);
+    // Release callback-acquired object
     if (acquire_data.last_object) {
         pool_release(pool, acquire_data.last_object);
         acquire_data.last_object = NULL; // Prevent double-free
+    }
+    // Release remaining held objects
+    for (size_t i = 1; i < 4; i++) {
+        if (held_objects[i]) {
+            pool_release(pool, held_objects[i]);
+        }
     }
 
     // Test 12: Pool statistics
@@ -270,7 +288,7 @@ int main() {
     assert_true("Stats total_objects_allocated", stats.total_objects_allocated >= 4);
     assert_true("Stats grow_count", stats.grow_count == 1);
     assert_true("Stats shrink_count", stats.shrink_count == 1);
-    assert_true("Stats queue_max_size", stats.queue_max_size >= 2);
+    assert_true("Stats queue_max_size", stats.queue_max_size == 2);
 
     pool_destroy(pool);
 

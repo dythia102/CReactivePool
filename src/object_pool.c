@@ -1,5 +1,6 @@
 #include "object_pool.h"
 #include <stdio.h>
+#include <string.h> // For memset
 #include <uv.h>
 
 // Sub-pool structure
@@ -108,6 +109,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
         free(pool);
         return NULL;
     }
+    memset(pool->request_queue, 0, DEFAULT_QUEUE_CAPACITY * sizeof(acquire_request_t)); // Initialize queue
 
     pool->sub_pool_count = sub_pool_count;
     pool->total_objects_allocated = pool_size;
@@ -436,9 +438,9 @@ bool pool_release(object_pool_t* pool, void* object) {
                 sub->used_count++;
                 sub->acquire_count++;
                 pool->allocator.on_reuse(object);
+                req.callback(object, req.context);
                 uv_mutex_unlock(&sub->mutex);
                 sub->total_contention_time_ns += uv_hrtime() - start_time;
-                req.callback(object, req.context);
                 return true;
             }
         }
