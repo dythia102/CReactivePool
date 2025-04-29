@@ -178,6 +178,19 @@ bool pool_release(object_pool_t* pool, void* object) {
     }
 
     uv_mutex_lock(&pool->mutex);
+    // Check if object is in pool->objects to avoid invalid dereference
+    bool is_pool_object = false;
+    for (size_t i = 0; i < pool->pool_size; i++) {
+        if (pool->objects[i] == object) {
+            is_pool_object = true;
+            break;
+        }
+    }
+    if (!is_pool_object) {
+        fprintf(stderr, "Object not in pool\n");
+        uv_mutex_unlock(&pool->mutex);
+        return false;
+    }
     if (!pool->allocator.validate(object)) {
         fprintf(stderr, "Invalid object\n");
         uv_mutex_unlock(&pool->mutex);
