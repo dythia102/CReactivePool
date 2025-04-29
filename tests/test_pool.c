@@ -6,6 +6,7 @@
 
 // Custom object: Message struct
 typedef struct {
+    uint32_t magic; // 0xDEADBEEF for validation
     char text[32];
     int id;
 } Message;
@@ -13,6 +14,7 @@ typedef struct {
 static void* message_alloc(void) {
     Message* msg = malloc(sizeof(Message));
     if (msg) {
+        msg->magic = 0xDEADBEEF;
         msg->text[0] = '\0';
         msg->id = 0;
     }
@@ -25,8 +27,13 @@ static void message_free(void* obj) {
 
 static void message_reset(void* obj) {
     Message* msg = (Message*)obj;
+    msg->magic = 0xDEADBEEF;
     msg->text[0] = '\0';
     msg->id = 0;
+}
+
+static bool message_validate(void* obj) {
+    return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
 int test_count = 0;
@@ -66,6 +73,7 @@ int main() {
         .alloc = message_alloc,
         .free = message_free,
         .reset = message_reset,
+        .validate = message_validate,
         .user_data = NULL
     };
 
@@ -119,7 +127,7 @@ int main() {
     // Test 4: Invalid operations
     assert_true("Release invalid object", !pool_release(pool, (void*)0xDEADBEEF));
     assert_true("Acquire from null pool", pool_acquire(NULL) == NULL);
-    assert_true("Release from null pool", !pool_release(NULL, msg1));
+    assert_true("Release from null pool", !pool_release(NULL, NULL)); // Use NULL instead of msg1
     pool_destroy(NULL);
     assert_true("Destroy null pool", true);
 
@@ -160,6 +168,31 @@ int main() {
     Message* msg4 = pool_acquire(pool);
     assert_true("Reset on reuse", msg4->text[0] == '\0' && msg4->id == 0);
     pool_release(pool, msg4);
+
+    // Test 8: Dynamic resizing
+    size_t old_capacity = pool_capacity(pool);
+    assert_true("Grow pool", pool_grow(pool, 2));
+    assert_true("New capacity", pool_capacity(pool) == old_capacity + 2);
+    Message* new_msg = pool_acquire(pool);
+    assert_true("Acquire after grow", new_msg != NULL);
+    assert_true("New object reset", new_msg->text[0] == '\0' && new_msg->id == 0);
+    pool_release(pool, new_msg);
+
+    // Test 9: Object validation
+    Message invalid_msg = { .magic = 0xBADBAD };
+    assert_true("Release invalid object (bad magic)", !pool_release(pool, &invalid_msg));
+    msg3 = pool_acquire(pool);
+    msg3->magic = 0xBADBAD; // Corrupt object
+    assert_true("Release corrupted object", !pool_release(pool, msg3));
+    msg3->magic = 0xDEADBEEF; // Restore for cleanup
+    pool_release(pool, msg3);
+
+    // Test 10: Pool statistics
+    object_pool_stats_t stats;
+    pool_stats(pool, &stats);
+    assert_true("Stats max_used", stats.max_used >= 1);
+    assert_true("Stats acquire_count", stats.acquire_count >= 3);
+    assert_true("Stats release_count", stats.release_count >= 3);
     pool_destroy(pool);
 
     // Summary

@@ -6,6 +6,9 @@ struct object_pool {
     bool* used;                   // Track object usage
     size_t pool_size;             // Total number of objects
     size_t used_count;            // Number of used objects
+    size_t max_used;              // Max concurrent objects
+    size_t acquire_count;         // Total acquire operations
+    size_t release_count;         // Total release operations
     object_pool_allocator_t allocator; // Allocator for objects
     uv_mutex_t mutex;             // Mutex for thread safety
 };
@@ -20,7 +23,12 @@ static void default_free(void* obj) {
 }
 
 static void default_reset(void* obj) {
-    // No-op for default allocator
+    (void)obj; // Suppress unused parameter warning
+}
+
+static bool default_validate(void* obj) {
+    (void)obj; // Suppress unused parameter warning
+    return true; // Always valid for default
 }
 
 object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) {
@@ -55,9 +63,15 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
 
     pool->pool_size = pool_size;
     pool->used_count = 0;
+    pool->max_used = 0;
+    pool->acquire_count = 0;
+    pool->release_count = 0;
     pool->allocator = allocator;
     if (!pool->allocator.reset) {
-        pool->allocator.reset = default_reset; // Default to no-op
+        pool->allocator.reset = default_reset;
+    }
+    if (!pool->allocator.validate) {
+        pool->allocator.validate = default_validate;
     }
 
     for (size_t i = 0; i < pool_size; i++) {
@@ -74,7 +88,7 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
             return NULL;
         }
         pool->used[i] = false;
-        pool->allocator.reset(pool->objects[i]); // Initialize objects
+        pool->allocator.reset(pool->objects[i]);
     }
 
     return pool;
@@ -85,9 +99,42 @@ object_pool_t* pool_create_default(void) {
         .alloc = default_alloc,
         .free = default_free,
         .reset = default_reset,
+        .validate = default_validate,
         .user_data = NULL
     };
     return pool_create(DEFAULT_POOL_SIZE, allocator);
+}
+
+bool pool_grow(object_pool_t* pool, size_t additional_size) {
+    if (!pool || additional_size == 0) {
+        fprintf(stderr, "Invalid pool or size\n");
+        return false;
+    }
+
+    uv_mutex_lock(&pool->mutex);
+    void** new_objects = realloc(pool->objects, (pool->pool_size + additional_size) * sizeof(void*));
+    bool* new_used = realloc(pool->used, (pool->pool_size + additional_size) * sizeof(bool));
+    if (!new_objects || !new_used) {
+        fprintf(stderr, "Failed to reallocate pool arrays\n");
+        uv_mutex_unlock(&pool->mutex);
+        return false;
+    }
+
+    pool->objects = new_objects;
+    pool->used = new_used;
+    for (size_t i = pool->pool_size; i < pool->pool_size + additional_size; i++) {
+        pool->objects[i] = pool->allocator.alloc();
+        if (!pool->objects[i]) {
+            fprintf(stderr, "Failed to allocate object %zu\n", i);
+            uv_mutex_unlock(&pool->mutex);
+            return false; // Leave pool in consistent state
+        }
+        pool->used[i] = false;
+        pool->allocator.reset(pool->objects[i]);
+    }
+    pool->pool_size += additional_size;
+    uv_mutex_unlock(&pool->mutex);
+    return true;
 }
 
 void* pool_acquire(object_pool_t* pool) {
@@ -105,11 +152,18 @@ void* pool_acquire(object_pool_t* pool) {
 
     for (size_t i = 0; i < pool->pool_size; i++) {
         if (!pool->used[i]) {
+            if (!pool->allocator.validate(pool->objects[i])) {
+                fprintf(stderr, "Invalid object at index %zu\n", i);
+                continue; // Skip invalid objects
+            }
             pool->used[i] = true;
             pool->used_count++;
-            pool->allocator.reset(pool->objects[i]); // Reset on acquire
+            pool->max_used = pool->used_count > pool->max_used ? pool->used_count : pool->max_used;
+            pool->acquire_count++;
+            pool->allocator.reset(pool->objects[i]);
+            void* obj = pool->objects[i];
             uv_mutex_unlock(&pool->mutex);
-            return pool->objects[i];
+            return obj;
         }
     }
 
@@ -124,11 +178,18 @@ bool pool_release(object_pool_t* pool, void* object) {
     }
 
     uv_mutex_lock(&pool->mutex);
+    if (!pool->allocator.validate(object)) {
+        fprintf(stderr, "Invalid object\n");
+        uv_mutex_unlock(&pool->mutex);
+        return false;
+    }
+
     for (size_t i = 0; i < pool->pool_size; i++) {
         if (pool->objects[i] == object && pool->used[i]) {
             pool->used[i] = false;
             pool->used_count--;
-            pool->allocator.reset(pool->objects[i]); // Reset on release
+            pool->release_count++;
+            pool->allocator.reset(pool->objects[i]);
             uv_mutex_unlock(&pool->mutex);
             return true;
         }
@@ -151,6 +212,17 @@ size_t pool_used_count(object_pool_t* pool) {
 
 size_t pool_capacity(object_pool_t* pool) {
     return pool ? pool->pool_size : 0; // No mutex needed, pool_size is immutable
+}
+
+void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
+    if (!pool || !stats) {
+        return;
+    }
+    uv_mutex_lock(&pool->mutex);
+    stats->max_used = pool->max_used;
+    stats->acquire_count = pool->acquire_count;
+    stats->release_count = pool->release_count;
+    uv_mutex_unlock(&pool->mutex);
 }
 
 void pool_destroy(object_pool_t* pool) {
