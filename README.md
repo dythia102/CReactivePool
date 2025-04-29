@@ -4,7 +4,7 @@ Features
 
 O(1) acquire and release operations for objects.
 Thread-safe using libuv mutexes, suitable for multi-threaded applications.
-Configurable pool size with dynamic resizing.
+Configurable pool size with dynamic growing and shrinking.
 Custom object types via allocator interface with reset and validation.
 Object reset/initialization to ensure default state on acquire/release.
 Pool usage statistics (max used, acquire/release counts).
@@ -87,6 +87,9 @@ int main() {
     object_pool_t* pool = pool_create(4, allocator);
     if (pool_grow(pool, 2)) {
         printf("Pool grew to %zu objects\n", pool_capacity(pool));
+    }
+    if (pool_shrink(pool, 2)) {
+        printf("Pool shrunk to %zu objects\n", pool_capacity(pool));
     }
     Message* msg = pool_acquire(pool);
     if (msg) {

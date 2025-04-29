@@ -137,6 +137,53 @@ bool pool_grow(object_pool_t* pool, size_t additional_size) {
     return true;
 }
 
+bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
+    if (!pool || reduce_size == 0 || reduce_size > pool->pool_size) {
+        fprintf(stderr, "Invalid pool or size\n");
+        return false;
+    }
+
+    uv_mutex_lock(&pool->mutex);
+    // Count unused objects from the end
+    size_t unused_count = 0;
+    for (size_t i = pool->pool_size; i > 0 && unused_count < reduce_size; i--) {
+        if (!pool->used[i - 1]) {
+            unused_count++;
+        } else {
+            break; // Stop at first used object
+        }
+    }
+    if (unused_count < reduce_size) {
+        fprintf(stderr, "Not enough unused objects to shrink\n");
+        uv_mutex_unlock(&pool->mutex);
+        return false;
+    }
+
+    // Free unused objects from the end
+    size_t new_size = pool->pool_size - reduce_size;
+    for (size_t i = new_size; i < pool->pool_size; i++) {
+        pool->allocator.free(pool->objects[i]);
+    }
+
+    // Reallocate arrays
+    void** new_objects = realloc(pool->objects, new_size * sizeof(void*));
+    bool* new_used = realloc(pool->used, new_size * sizeof(bool));
+    if (!new_objects || !new_used) {
+        fprintf(stderr, "Failed to reallocate pool arrays\n");
+        uv_mutex_unlock(&pool->mutex);
+        return false;
+    }
+
+    pool->objects = new_objects;
+    pool->used = new_used;
+    pool->pool_size = new_size;
+    if (pool->max_used > pool->pool_size) {
+        pool->max_used = pool->pool_size; // Adjust max_used
+    }
+    uv_mutex_unlock(&pool->mutex);
+    return true;
+}
+
 void* pool_acquire(object_pool_t* pool) {
     if (!pool) {
         fprintf(stderr, "Invalid pool\n");

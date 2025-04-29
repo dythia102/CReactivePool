@@ -35,6 +35,9 @@ object_pool_t* pool_create_default(void);
 // Grow the pool by adding more objects
 bool pool_grow(object_pool_t* pool, size_t additional_size);
 
+// Shrink the pool by removing unused objects
+bool pool_shrink(object_pool_t* pool, size_t reduce_size);
+
 // Acquire an object from the pool; returns NULL if pool is exhausted
 void* pool_acquire(object_pool_t* pool);
 
