@@ -23,11 +23,18 @@ static void message_free(void* obj) {
     free(obj);
 }
 
+static void message_reset(void* obj) {
+    Message* msg = (Message*)obj;
+    msg->text[0] = '\0';
+    msg->id = 0;
+}
+
 int main() {
     // Create allocator for Message
     object_pool_allocator_t allocator = {
         .alloc = message_alloc,
         .free = message_free,
+        .reset = message_reset,
         .user_data = NULL
     };
 
@@ -67,12 +74,13 @@ int main() {
 
     printf("Pool status: %zu objects, %zu used\n", pool_capacity(pool), pool_used_count(pool));
 
-    // Acquire again to demonstrate reuse
+    // Acquire again to demonstrate reuse and reset
     Message* msg3 = pool_acquire(pool);
     if (msg3) {
+        printf("Acquired msg3: text=%s, id=%d (should be empty)\n", msg3->text, msg3->id);
         strcpy(msg3->text, "Reused");
         msg3->id = 3;
-        printf("Acquired msg3 (reused): text=%s, id=%d\n", msg3->text, msg3->id);
+        printf("Modified msg3: text=%s, id=%d\n", msg3->text, msg3->id);
     }
 
     // Try to acquire when pool is exhausted

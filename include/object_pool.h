@@ -11,6 +11,7 @@
 typedef struct {
     void* (*alloc)(void);          // Allocate a single object
     void (*free)(void*);           // Free a single object
+    void (*reset)(void*);          // Reset object to default state (optional)
     void* user_data;               // Optional user data for allocator
 } object_pool_allocator_t;
 

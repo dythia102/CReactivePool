@@ -23,6 +23,12 @@ static void message_free(void* obj) {
     free(obj);
 }
 
+static void message_reset(void* obj) {
+    Message* msg = (Message*)obj;
+    msg->text[0] = '\0';
+    msg->id = 0;
+}
+
 int test_count = 0;
 int test_passed = 0;
 
@@ -59,6 +65,7 @@ int main() {
     object_pool_allocator_t allocator = {
         .alloc = message_alloc,
         .free = message_free,
+        .reset = message_reset,
         .user_data = NULL
     };
 
@@ -74,6 +81,7 @@ int main() {
     Message* msg1 = pool_acquire(pool);
     assert_true("Acquire first object", msg1 != NULL);
     assert_true("Used count after acquire", pool_used_count(pool) == 1);
+    assert_true("First object reset", msg1->text[0] == '\0' && msg1->id == 0);
     strcpy(msg1->text, "Test");
     msg1->id = 1;
     assert_true("Object content", strcmp(msg1->text, "Test") == 0 && msg1->id == 1);
@@ -142,6 +150,16 @@ int main() {
         total_success += thread_data[i].success_count;
     }
     assert_true("Thread-safe acquire/release", total_success <= 40 && pool_used_count(pool) == 0);
+
+    // Test 7: Reset on reuse
+    Message* msg3 = pool_acquire(pool);
+    assert_true("Acquire for reset test", msg3 != NULL);
+    strcpy(msg3->text, "Temporary");
+    msg3->id = 999;
+    pool_release(pool, msg3);
+    Message* msg4 = pool_acquire(pool);
+    assert_true("Reset on reuse", msg4->text[0] == '\0' && msg4->id == 0);
+    pool_release(pool, msg4);
     pool_destroy(pool);
 
     // Summary

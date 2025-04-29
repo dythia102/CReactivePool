@@ -5,6 +5,7 @@ Features
 O(1) acquire and release operations for objects.
 Thread-safe using libuv mutexes, suitable for multi-threaded applications.
 Configurable pool size and custom object types via allocator interface.
+Object reset/initialization to ensure default state on acquire/release.
 Robust error handling for pool exhaustion and invalid operations.
 No external dependencies except libuv for thread safety.
 Suitable for reactive streams, network programming, and high-throughput applications.
@@ -42,7 +43,7 @@ int main() {
 }
 
 Custom Object Usage
-Define a custom object and allocator:
+Define a custom object and allocator with reset:
 #include "object_pool.h"
 #include <stdio.h>
 #include <string.h>
@@ -66,8 +67,14 @@ void message_free(void* obj) {
     free(obj);
 }
 
+void message_reset(void* obj) {
+    Message* msg = (Message*)obj;
+    msg->text[0] = '\0';
+    msg->id = 0;
+}
+
 int main() {
-    object_pool_allocator_t allocator = { message_alloc, message_free, NULL };
+    object_pool_allocator_t allocator = { message_alloc, message_free, message_reset, NULL };
     object_pool_t* pool = pool_create(4, allocator);
     Message* msg = pool_acquire(pool);
     if (msg) {
@@ -103,5 +110,6 @@ Future Plans
 
 Dynamic pool resizing for flexibility.
 Integration with libuv-based reactive streams (e.g., map, filter).
-Support for object initialization/reset callbacks.
+Object validation for enhanced robustness.
+Pool usage statistics for monitoring.
 
