@@ -3,13 +3,14 @@ A lightweight, high-performance, thread-safe object pool library in C, designed 
 Features
 
 O(1) acquire and release operations for objects.
-Thread-safe using libuv mutexes, suitable for multi-threaded applications.
+Thread-safe with reduced mutex contention using sub-pool partitioning.
 Configurable pool size with dynamic growing and shrinking.
-Custom object types via allocator interface with reset and validation.
+Custom object types via allocator interface with reset, validation, and lifecycle callbacks.
 Object reset/initialization to ensure default state on acquire/release.
-Advanced pool usage statistics (max used, acquire/release counts, contention metrics, allocation history).
+Backpressure support via request queueing for high-throughput scenarios.
+Advanced pool usage statistics (max used, acquire/release counts, contention metrics, allocation history, queue usage).
 Error callbacks for fine-grained error handling.
-Robust error handling for pool exhaustion and invalid operations.
+Robust error handling for pool exhaustion, invalid operations, and queue limits.
 No external dependencies except libuv for thread safety.
 Suitable for reactive streams, network programming, and high-throughput applications.
 
@@ -36,7 +37,7 @@ Basic Usage (Default Pool)
 
 int main() {
     object_pool_t* pool = pool_create_default();
-    void* obj = pool_acquire(pool);
+    void* obj = pool_acquire(pool, NULL, NULL);
     if (obj) {
         printf("Acquired object: %p\n", obj);
         pool_release(pool, obj);
@@ -46,7 +47,7 @@ int main() {
 }
 
 Custom Object Usage
-Define a custom object with allocator, reset, validation, and error callback:
+Define a custom object with allocator, reset, validation, lifecycle callbacks, and error handling:
 #include "object_pool.h"
 #include <stdio.h>
 #include <string.h>
@@ -84,20 +85,45 @@ bool message_validate(void* obj) {
     return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
+void message_on_create(void* obj) {
+    printf("Created: %p\n", obj);
+}
+
+void message_on_destroy(void* obj) {
+    printf("Destroyed: %p\n", obj);
+}
+
+void message_on_reuse(void* obj) {
+    printf("Reusing: %p\n", obj);
+}
+
 void error_callback(object_pool_error_t error, const char* message, void* context) {
     printf("Error [%d]: %s\n", error, message);
 }
 
+void acquire_callback(void* object, void* context) {
+    Message* msg = (Message*)object;
+    if (msg) {
+        strcpy(msg->text, "Backpressure");
+        msg->id = *(int*)context;
+        printf("Acquired via callback: text=%s, id=%d\n", msg->text, msg->id);
+    }
+}
+
 int main() {
-    object_pool_allocator_t allocator = { message_alloc, message_free, message_reset, message_validate, NULL };
-    object_pool_t* pool = pool_create(4, allocator, error_callback, NULL);
+    object_pool_allocator_t allocator = {
+        message_alloc, message_free, message_reset, message_validate,
+        message_on_create, message_on_destroy, message_on_reuse, NULL
+    };
+    object_pool_t* pool = pool_create(4, 2, allocator, error_callback, NULL);
     if (pool_grow(pool, 2)) {
         printf("Pool grew to %zu objects\n", pool_capacity(pool));
     }
     if (pool_shrink(pool, 2)) {
         printf("Pool shrunk to %zu objects\n", pool_capacity(pool));
     }
-    Message* msg = pool_acquire(pool);
+    int callback_id = 3;
+    Message* msg = pool_acquire(pool, acquire_callback, &callback_id);
     if (msg) {
         strcpy(msg->text, "Hello");
         msg->id = 1;
@@ -107,10 +133,11 @@ int main() {
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
     printf("Stats: max_used=%zu, acquires=%zu, releases=%zu, contention_attempts=%zu, "
-           "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu\n",
+           "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu, queue_max=%zu\n",
            stats.max_used, stats.acquire_count, stats.release_count,
            stats.contention_attempts, stats.total_contention_time_ns,
-           stats.total_objects_allocated, stats.grow_count, stats.shrink_count);
+           stats.total_objects_allocated, stats.grow_count, stats.shrink_count,
+           stats.queue_max_size);
     pool_destroy(pool);
     return 0;
 }

@@ -6,6 +6,8 @@
 #include <uv.h> // For uv_mutex_t
 
 #define DEFAULT_POOL_SIZE 16
+#define DEFAULT_SUB_POOL_COUNT 4
+#define DEFAULT_QUEUE_CAPACITY 32
 
 // Allocator interface for custom objects
 typedef struct {
@@ -13,6 +15,9 @@ typedef struct {
     void (*free)(void*);           // Free a single object
     void (*reset)(void*);          // Reset object to default state (optional)
     bool (*validate)(void*);       // Validate object integrity (optional)
+    void (*on_create)(void*);      // Called after object creation (optional)
+    void (*on_destroy)(void*);     // Called before object destruction (optional)
+    void (*on_reuse)(void*);       // Called before object reuse (optional)
     void* user_data;               // Optional user data for allocator
 } object_pool_allocator_t;
 
@@ -24,11 +29,15 @@ typedef enum {
     POOL_ERROR_EXHAUSTED,
     POOL_ERROR_ALLOCATION_FAILED,
     POOL_ERROR_INVALID_SIZE,
-    POOL_ERROR_INSUFFICIENT_UNUSED
+    POOL_ERROR_INSUFFICIENT_UNUSED,
+    POOL_ERROR_QUEUE_FULL
 } object_pool_error_t;
 
 // Error callback
 typedef void (*object_pool_error_callback_t)(object_pool_error_t error, const char* message, void* context);
+
+// Acquire callback for backpressure
+typedef void (*object_pool_acquire_callback_t)(void* object, void* context);
 
 // Pool statistics
 typedef struct {
@@ -40,13 +49,14 @@ typedef struct {
     size_t total_objects_allocated; // Total objects allocated
     size_t grow_count;             // Number of grow operations
     size_t shrink_count;           // Number of shrink operations
+    size_t queue_max_size;         // Max queue size for backpressure
 } object_pool_stats_t;
 
 // Opaque pool type
 typedef struct object_pool object_pool_t;
 
-// Create a thread-safe pool with specified size, allocator, and optional error callback
-object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator,
+// Create a thread-safe pool with specified size, sub-pool count, allocator, and optional error callback
+object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_allocator_t allocator,
                            object_pool_error_callback_t error_callback, void* error_context);
 
 // Create a thread-safe pool with default size (16) and default allocator
@@ -58,8 +68,8 @@ bool pool_grow(object_pool_t* pool, size_t additional_size);
 // Shrink the pool by removing unused objects
 bool pool_shrink(object_pool_t* pool, size_t reduce_size);
 
-// Acquire an object from the pool; returns NULL if pool is exhausted
-void* pool_acquire(object_pool_t* pool);
+// Acquire an object from the pool; if exhausted, enqueue callback (NULL if queue full)
+void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback, void* context);
 
 // Release an object back to the pool; returns false if object is invalid
 bool pool_release(object_pool_t* pool, void* object);
