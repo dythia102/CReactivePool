@@ -1,7 +1,8 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Iinclude
-LDFLAGS =
+LDFLAGS = -luv
 
+# Source and object files
 SRC = src/object_pool.c
 OBJ = $(SRC:.c=.o)
 
@@ -13,17 +14,22 @@ TEST_SRC = tests/test_pool.c
 TEST_OBJ = $(TEST_SRC:.c=.o)
 TEST_BIN = test_pool_tests
 
+# Default target
 all: $(EXAMPLE_BIN) $(TEST_BIN)
 
+# Link example binary
 $(EXAMPLE_BIN): $(OBJ) $(EXAMPLE_OBJ)
 	$(CC) $(OBJ) $(EXAMPLE_OBJ) -o $@ $(LDFLAGS)
 
+# Link test binary
 $(TEST_BIN): $(OBJ) $(TEST_OBJ)
 	$(CC) $(OBJ) $(TEST_OBJ) -o $@ $(LDFLAGS)
 
+# Compile source to object files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Clean build artifacts
 clean:
 	rm -f $(OBJ) $(EXAMPLE_OBJ) $(TEST_OBJ) $(EXAMPLE_BIN) $(TEST_BIN)
 

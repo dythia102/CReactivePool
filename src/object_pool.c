@@ -7,6 +7,7 @@ struct object_pool {
     size_t pool_size;             // Total number of objects
     size_t used_count;            // Number of used objects
     object_pool_allocator_t allocator; // Allocator for objects
+    uv_mutex_t mutex;             // Mutex for thread safety
 };
 
 // Default allocator for plain void* (uses malloc/free)
@@ -40,6 +41,14 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
         return NULL;
     }
 
+    if (uv_mutex_init(&pool->mutex) != 0) {
+        fprintf(stderr, "Failed to initialize mutex\n");
+        free(pool->objects);
+        free(pool->used);
+        free(pool);
+        return NULL;
+    }
+
     pool->pool_size = pool_size;
     pool->used_count = 0;
     pool->allocator = allocator;
@@ -51,6 +60,7 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
             for (size_t j = 0; j < i; j++) {
                 pool->allocator.free(pool->objects[j]);
             }
+            uv_mutex_destroy(&pool->mutex);
             free(pool->objects);
             free(pool->used);
             free(pool);
@@ -77,7 +87,9 @@ void* pool_acquire(object_pool_t* pool) {
         return NULL;
     }
 
+    uv_mutex_lock(&pool->mutex);
     if (pool->used_count >= pool->pool_size) {
+        uv_mutex_unlock(&pool->mutex);
         fprintf(stderr, "Pool exhausted\n");
         return NULL;
     }
@@ -86,10 +98,12 @@ void* pool_acquire(object_pool_t* pool) {
         if (!pool->used[i]) {
             pool->used[i] = true;
             pool->used_count++;
+            uv_mutex_unlock(&pool->mutex);
             return pool->objects[i];
         }
     }
 
+    uv_mutex_unlock(&pool->mutex);
     return NULL; // Should not reach here
 }
 
@@ -99,24 +113,33 @@ bool pool_release(object_pool_t* pool, void* object) {
         return false;
     }
 
+    uv_mutex_lock(&pool->mutex);
     for (size_t i = 0; i < pool->pool_size; i++) {
         if (pool->objects[i] == object && pool->used[i]) {
             pool->used[i] = false;
             pool->used_count--;
+            uv_mutex_unlock(&pool->mutex);
             return true;
         }
     }
 
+    uv_mutex_unlock(&pool->mutex);
     fprintf(stderr, "Invalid or unused object\n");
     return false;
 }
 
 size_t pool_used_count(object_pool_t* pool) {
-    return pool ? pool->used_count : 0;
+    if (!pool) {
+        return 0;
+    }
+    uv_mutex_lock(&pool->mutex);
+    size_t count = pool->used_count;
+    uv_mutex_unlock(&pool->mutex);
+    return count;
 }
 
 size_t pool_capacity(object_pool_t* pool) {
-    return pool ? pool->pool_size : 0;
+    return pool ? pool->pool_size : 0; // No mutex needed, pool_size is immutable
 }
 
 void pool_destroy(object_pool_t* pool) {
@@ -127,6 +150,7 @@ void pool_destroy(object_pool_t* pool) {
     for (size_t i = 0; i < pool->pool_size; i++) {
         pool->allocator.free(pool->objects[i]);
     }
+    uv_mutex_destroy(&pool->mutex);
     free(pool->objects);
     free(pool->used);
     free(pool);

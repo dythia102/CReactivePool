@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <uv.h> // For uv_mutex_t
 
 #define DEFAULT_POOL_SIZE 16
 
@@ -16,15 +17,14 @@ typedef struct {
 // Opaque pool type
 typedef struct object_pool object_pool_t;
 
-// Create a pool with specified size and allocator
+// Create a thread-safe pool with specified size and allocator
 object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator);
 
-// Create a pool with default size (16) and default allocator (malloc/free for void*)
+// Create a thread-safe pool with default size (16) and default allocator
 object_pool_t* pool_create_default(void);
 
 // Acquire an object from the pool; returns NULL if pool is exhausted
-void* pool_acquire(object_pool_t* pool)
-;
+void* pool_acquire(object_pool_t* pool);
 
 // Release an object back to the pool; returns false if object is invalid
 bool pool_release(object_pool_t* pool, void* object);

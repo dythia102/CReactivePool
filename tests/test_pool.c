@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <uv.h>
 
 // Custom object: Message struct
 typedef struct {
@@ -32,6 +33,24 @@ void assert_true(const char* test_name, bool condition) {
         printf("PASS: %s\n", test_name);
     } else {
         printf("FAIL: %s\n", test_name);
+    }
+}
+
+// Thread test data
+typedef struct {
+    object_pool_t* pool;
+    int acquire_count;
+    int success_count;
+} thread_test_data_t;
+
+void thread_test_cb(void* arg) {
+    thread_test_data_t* data = (thread_test_data_t*)arg;
+    for (int i = 0; i < data->acquire_count; i++) {
+        void* obj = pool_acquire(data->pool);
+        if (obj) {
+            data->success_count++;
+            pool_release(data->pool, obj);
+        }
     }
 }
 
@@ -93,9 +112,8 @@ int main() {
     assert_true("Release invalid object", !pool_release(pool, (void*)0xDEADBEEF));
     assert_true("Acquire from null pool", pool_acquire(NULL) == NULL);
     assert_true("Release from null pool", !pool_release(NULL, msg1));
-    pool_destroy(NULL); // Simply call without expecting return value
-    assert_true("Destroy null pool", true); // Test passes if no crash
-    pool_destroy(pool);
+    pool_destroy(NULL);
+    assert_true("Destroy null pool", true);
 
     // Test 5: Default pool
     pool = pool_create_default();
@@ -104,6 +122,26 @@ int main() {
     void* obj = pool_acquire(pool);
     assert_true("Acquire from default pool", obj != NULL);
     assert_true("Release to default pool", pool_release(pool, obj));
+    pool_destroy(pool);
+
+    // Test 6: Thread safety
+    pool = pool_create(4, allocator);
+    uv_thread_t threads[4];
+    thread_test_data_t thread_data[4];
+    for (int i = 0; i < 4; i++) {
+        thread_data[i].pool = pool;
+        thread_data[i].acquire_count = 10;
+        thread_data[i].success_count = 0;
+        uv_thread_create(&threads[i], thread_test_cb, &thread_data[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+        uv_thread_join(&threads[i]);
+    }
+    int total_success = 0;
+    for (int i = 0; i < 4; i++) {
+        total_success += thread_data[i].success_count;
+    }
+    assert_true("Thread-safe acquire/release", total_success <= 40 && pool_used_count(pool) == 0);
     pool_destroy(pool);
 
     // Summary
