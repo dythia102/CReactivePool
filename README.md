@@ -7,7 +7,8 @@ Thread-safe using libuv mutexes, suitable for multi-threaded applications.
 Configurable pool size with dynamic growing and shrinking.
 Custom object types via allocator interface with reset and validation.
 Object reset/initialization to ensure default state on acquire/release.
-Pool usage statistics (max used, acquire/release counts).
+Advanced pool usage statistics (max used, acquire/release counts, contention metrics, allocation history).
+Error callbacks for fine-grained error handling.
 Robust error handling for pool exhaustion and invalid operations.
 No external dependencies except libuv for thread safety.
 Suitable for reactive streams, network programming, and high-throughput applications.
@@ -45,11 +46,12 @@ int main() {
 }
 
 Custom Object Usage
-Define a custom object with allocator, reset, and validation:
+Define a custom object with allocator, reset, validation, and error callback:
 #include "object_pool.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 typedef struct {
     uint32_t magic; // 0xDEADBEEF
@@ -82,9 +84,13 @@ bool message_validate(void* obj) {
     return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
+void error_callback(object_pool_error_t error, const char* message, void* context) {
+    printf("Error [%d]: %s\n", error, message);
+}
+
 int main() {
     object_pool_allocator_t allocator = { message_alloc, message_free, message_reset, message_validate, NULL };
-    object_pool_t* pool = pool_create(4, allocator);
+    object_pool_t* pool = pool_create(4, allocator, error_callback, NULL);
     if (pool_grow(pool, 2)) {
         printf("Pool grew to %zu objects\n", pool_capacity(pool));
     }
@@ -100,8 +106,11 @@ int main() {
     }
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
-    printf("Stats: max_used=%zu, acquires=%zu, releases=%zu\n",
-           stats.max_used, stats.acquire_count, stats.release_count);
+    printf("Stats: max_used=%zu, acquires=%zu, releases=%zu, contention_attempts=%zu, "
+           "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu\n",
+           stats.max_used, stats.acquire_count, stats.release_count,
+           stats.contention_attempts, stats.total_contention_time_ns,
+           stats.total_objects_allocated, stats.grow_count, stats.shrink_count);
     pool_destroy(pool);
     return 0;
 }

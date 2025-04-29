@@ -16,18 +16,38 @@ typedef struct {
     void* user_data;               // Optional user data for allocator
 } object_pool_allocator_t;
 
+// Error types
+typedef enum {
+    POOL_ERROR_NONE,
+    POOL_ERROR_INVALID_POOL,
+    POOL_ERROR_INVALID_OBJECT,
+    POOL_ERROR_EXHAUSTED,
+    POOL_ERROR_ALLOCATION_FAILED,
+    POOL_ERROR_INVALID_SIZE,
+    POOL_ERROR_INSUFFICIENT_UNUSED
+} object_pool_error_t;
+
+// Error callback
+typedef void (*object_pool_error_callback_t)(object_pool_error_t error, const char* message, void* context);
+
 // Pool statistics
 typedef struct {
     size_t max_used;               // Max concurrent objects used
     size_t acquire_count;          // Total acquire operations
     size_t release_count;          // Total release operations
+    size_t contention_attempts;    // Total mutex contention attempts
+    uint64_t total_contention_time_ns; // Total mutex wait time (nanoseconds)
+    size_t total_objects_allocated; // Total objects allocated
+    size_t grow_count;             // Number of grow operations
+    size_t shrink_count;           // Number of shrink operations
 } object_pool_stats_t;
 
 // Opaque pool type
 typedef struct object_pool object_pool_t;
 
-// Create a thread-safe pool with specified size and allocator
-object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator);
+// Create a thread-safe pool with specified size, allocator, and optional error callback
+object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator,
+                           object_pool_error_callback_t error_callback, void* error_context);
 
 // Create a thread-safe pool with default size (16) and default allocator
 object_pool_t* pool_create_default(void);

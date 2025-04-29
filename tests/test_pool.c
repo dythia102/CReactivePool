@@ -36,6 +36,21 @@ static bool message_validate(void* obj) {
     return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
+// Error callback test data
+typedef struct {
+    int error_count;
+    object_pool_error_t last_error;
+    char last_message[256];
+} error_test_data_t;
+
+static void error_callback(object_pool_error_t error, const char* message, void* context) {
+    error_test_data_t* data = (error_test_data_t*)context;
+    data->error_count++;
+    data->last_error = error;
+    strncpy(data->last_message, message, sizeof(data->last_message) - 1);
+    data->last_message[sizeof(data->last_message) - 1] = '\0';
+}
+
 int test_count = 0;
 int test_passed = 0;
 
@@ -78,14 +93,15 @@ int main() {
     };
 
     // Test 1: Create and destroy pool
-    object_pool_t* pool = pool_create(4, allocator);
+    error_test_data_t error_data = {0};
+    object_pool_t* pool = pool_create(4, allocator, error_callback, &error_data);
     assert_true("Pool creation", pool != NULL);
     assert_true("Pool capacity", pool_capacity(pool) == 4);
     assert_true("Pool used count", pool_used_count(pool) == 0);
     pool_destroy(pool);
 
     // Test 2: Acquire and release objects
-    pool = pool_create(4, allocator);
+    pool = pool_create(4, allocator, error_callback, &error_data);
     Message* msg1 = pool_acquire(pool);
     assert_true("Acquire first object", msg1 != NULL);
     assert_true("Used count after acquire", pool_used_count(pool) == 1);
@@ -115,6 +131,7 @@ int main() {
     }
     assert_true("Acquire all objects", acquired == 4);
     assert_true("Pool exhaustion", messages[4] == NULL);
+    assert_true("Exhaustion error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_EXHAUSTED);
 
     // Release all objects
     for (size_t i = 0; i < 4; i++) {
@@ -126,8 +143,9 @@ int main() {
 
     // Test 4: Invalid operations
     assert_true("Release invalid object", !pool_release(pool, (void*)0xDEADBEEF));
+    assert_true("Invalid object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
     assert_true("Acquire from null pool", pool_acquire(NULL) == NULL);
-    assert_true("Release from null pool", !pool_release(NULL, NULL)); // Use NULL instead of msg1
+    assert_true("Release from null pool", !pool_release(NULL, NULL));
     pool_destroy(NULL);
     assert_true("Destroy null pool", true);
 
@@ -141,7 +159,7 @@ int main() {
     pool_destroy(pool);
 
     // Test 6: Thread safety
-    pool = pool_create(4, allocator);
+    pool = pool_create(4, allocator, error_callback, &error_data);
     uv_thread_t threads[4];
     thread_test_data_t thread_data[4];
     for (int i = 0; i < 4; i++) {
@@ -169,16 +187,23 @@ int main() {
     assert_true("Reset on reuse", msg4->text[0] == '\0' && msg4->id == 0);
     pool_release(pool, msg4);
 
-    // Test 8: Dynamic resizing
+    // Test 8: Dynamic resizing (grow)
     size_t old_capacity = pool_capacity(pool);
     assert_true("Grow pool", pool_grow(pool, 2));
-    assert_true("New capacity", pool_capacity(pool) == old_capacity + 2);
+    assert_true("New capacity after grow", pool_capacity(pool) == old_capacity + 2);
     Message* new_msg = pool_acquire(pool);
     assert_true("Acquire after grow", new_msg != NULL);
     assert_true("New object reset", new_msg->text[0] == '\0' && new_msg->id == 0);
     pool_release(pool, new_msg);
 
-    // Test 9: Object validation
+    // Test 9: Dynamic resizing (shrink)
+    assert_true("Shrink pool", pool_shrink(pool, 2));
+    assert_true("New capacity after shrink", pool_capacity(pool) == old_capacity);
+    new_msg = pool_acquire(pool);
+    assert_true("Acquire after shrink", new_msg != NULL);
+    pool_release(pool, new_msg);
+
+    // Test 10: Object validation
     Message invalid_msg = { .magic = 0xBADBAD };
     assert_true("Release invalid object (bad magic)", !pool_release(pool, &invalid_msg));
     msg3 = pool_acquire(pool);
@@ -187,12 +212,17 @@ int main() {
     msg3->magic = 0xDEADBEEF; // Restore for cleanup
     pool_release(pool, msg3);
 
-    // Test 10: Pool statistics
+    // Test 11: Pool statistics
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
     assert_true("Stats max_used", stats.max_used >= 1);
     assert_true("Stats acquire_count", stats.acquire_count >= 3);
     assert_true("Stats release_count", stats.release_count >= 3);
+    assert_true("Stats contention_attempts", stats.contention_attempts > 0);
+    assert_true("Stats total_objects_allocated", stats.total_objects_allocated >= 4);
+    assert_true("Stats grow_count", stats.grow_count == 1);
+    assert_true("Stats shrink_count", stats.shrink_count == 1);
+
     pool_destroy(pool);
 
     // Summary

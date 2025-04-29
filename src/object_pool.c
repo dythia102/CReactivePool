@@ -9,7 +9,14 @@ struct object_pool {
     size_t max_used;              // Max concurrent objects
     size_t acquire_count;         // Total acquire operations
     size_t release_count;         // Total release operations
+    size_t contention_attempts;   // Total mutex contention attempts
+    uint64_t total_contention_time_ns; // Total mutex wait time
+    size_t total_objects_allocated; // Total objects allocated
+    size_t grow_count;            // Number of grow operations
+    size_t shrink_count;          // Number of shrink operations
     object_pool_allocator_t allocator; // Allocator for objects
+    object_pool_error_callback_t error_callback; // Error callback
+    void* error_context;          // Error callback context
     uv_mutex_t mutex;             // Mutex for thread safety
 };
 
@@ -31,22 +38,36 @@ static bool default_validate(void* obj) {
     return true; // Always valid for default
 }
 
-object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) {
+// Helper to invoke error callback
+static void report_error(object_pool_t* pool, object_pool_error_t error, const char* message) {
+    if (pool && pool->error_callback) {
+        pool->error_callback(error, message, pool->error_context);
+    } else {
+        fprintf(stderr, "%s\n", message);
+    }
+}
+
+object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator,
+                           object_pool_error_callback_t error_callback, void* error_context) {
     if (pool_size == 0 || !allocator.alloc || !allocator.free) {
-        fprintf(stderr, "Invalid pool size or allocator\n");
+        if (error_callback) {
+            error_callback(POOL_ERROR_INVALID_SIZE, "Invalid pool size or allocator", error_context);
+        } else {
+            fprintf(stderr, "Invalid pool size or allocator\n");
+        }
         return NULL;
     }
 
     object_pool_t* pool = malloc(sizeof(object_pool_t));
     if (!pool) {
-        fprintf(stderr, "Failed to allocate pool\n");
+        report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate pool");
         return NULL;
     }
 
     pool->objects = malloc(pool_size * sizeof(void*));
     pool->used = malloc(pool_size * sizeof(bool));
     if (!pool->objects || !pool->used) {
-        fprintf(stderr, "Failed to allocate pool arrays\n");
+        report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate pool arrays");
         free(pool->objects);
         free(pool->used);
         free(pool);
@@ -54,7 +75,7 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
     }
 
     if (uv_mutex_init(&pool->mutex) != 0) {
-        fprintf(stderr, "Failed to initialize mutex\n");
+        report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to initialize mutex");
         free(pool->objects);
         free(pool->used);
         free(pool);
@@ -66,7 +87,14 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
     pool->max_used = 0;
     pool->acquire_count = 0;
     pool->release_count = 0;
+    pool->contention_attempts = 0;
+    pool->total_contention_time_ns = 0;
+    pool->total_objects_allocated = pool_size;
+    pool->grow_count = 0;
+    pool->shrink_count = 0;
     pool->allocator = allocator;
+    pool->error_callback = error_callback;
+    pool->error_context = error_context;
     if (!pool->allocator.reset) {
         pool->allocator.reset = default_reset;
     }
@@ -77,7 +105,7 @@ object_pool_t* pool_create(size_t pool_size, object_pool_allocator_t allocator) 
     for (size_t i = 0; i < pool_size; i++) {
         pool->objects[i] = pool->allocator.alloc();
         if (!pool->objects[i]) {
-            fprintf(stderr, "Failed to allocate object %zu\n", i);
+            report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate object");
             for (size_t j = 0; j < i; j++) {
                 pool->allocator.free(pool->objects[j]);
             }
@@ -102,21 +130,25 @@ object_pool_t* pool_create_default(void) {
         .validate = default_validate,
         .user_data = NULL
     };
-    return pool_create(DEFAULT_POOL_SIZE, allocator);
+    return pool_create(DEFAULT_POOL_SIZE, allocator, NULL, NULL);
 }
 
 bool pool_grow(object_pool_t* pool, size_t additional_size) {
     if (!pool || additional_size == 0) {
-        fprintf(stderr, "Invalid pool or size\n");
+        report_error(pool, POOL_ERROR_INVALID_SIZE, "Invalid pool or size");
         return false;
     }
 
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
+
     void** new_objects = realloc(pool->objects, (pool->pool_size + additional_size) * sizeof(void*));
     bool* new_used = realloc(pool->used, (pool->pool_size + additional_size) * sizeof(bool));
     if (!new_objects || !new_used) {
-        fprintf(stderr, "Failed to reallocate pool arrays\n");
+        report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate pool arrays");
         uv_mutex_unlock(&pool->mutex);
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return false;
     }
 
@@ -125,25 +157,32 @@ bool pool_grow(object_pool_t* pool, size_t additional_size) {
     for (size_t i = pool->pool_size; i < pool->pool_size + additional_size; i++) {
         pool->objects[i] = pool->allocator.alloc();
         if (!pool->objects[i]) {
-            fprintf(stderr, "Failed to allocate object %zu\n", i);
+            report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate object");
             uv_mutex_unlock(&pool->mutex);
+            pool->total_contention_time_ns += uv_hrtime() - start_time;
             return false; // Leave pool in consistent state
         }
         pool->used[i] = false;
         pool->allocator.reset(pool->objects[i]);
     }
     pool->pool_size += additional_size;
+    pool->total_objects_allocated += additional_size;
+    pool->grow_count++;
     uv_mutex_unlock(&pool->mutex);
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
     return true;
 }
 
 bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
     if (!pool || reduce_size == 0 || reduce_size > pool->pool_size) {
-        fprintf(stderr, "Invalid pool or size\n");
+        report_error(pool, POOL_ERROR_INVALID_SIZE, "Invalid pool or size");
         return false;
     }
 
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
+
     // Count unused objects from the end
     size_t unused_count = 0;
     for (size_t i = pool->pool_size; i > 0 && unused_count < reduce_size; i--) {
@@ -154,8 +193,9 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
         }
     }
     if (unused_count < reduce_size) {
-        fprintf(stderr, "Not enough unused objects to shrink\n");
+        report_error(pool, POOL_ERROR_INSUFFICIENT_UNUSED, "Not enough unused objects to shrink");
         uv_mutex_unlock(&pool->mutex);
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return false;
     }
 
@@ -169,8 +209,9 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
     void** new_objects = realloc(pool->objects, new_size * sizeof(void*));
     bool* new_used = realloc(pool->used, new_size * sizeof(bool));
     if (!new_objects || !new_used) {
-        fprintf(stderr, "Failed to reallocate pool arrays\n");
+        report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate pool arrays");
         uv_mutex_unlock(&pool->mutex);
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return false;
     }
 
@@ -180,27 +221,33 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
     if (pool->max_used > pool->pool_size) {
         pool->max_used = pool->pool_size; // Adjust max_used
     }
+    pool->shrink_count++;
     uv_mutex_unlock(&pool->mutex);
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
     return true;
 }
 
 void* pool_acquire(object_pool_t* pool) {
     if (!pool) {
-        fprintf(stderr, "Invalid pool\n");
+        report_error(NULL, POOL_ERROR_INVALID_POOL, "Invalid pool");
         return NULL;
     }
 
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
+
     if (pool->used_count >= pool->pool_size) {
+        report_error(pool, POOL_ERROR_EXHAUSTED, "Pool exhausted");
         uv_mutex_unlock(&pool->mutex);
-        fprintf(stderr, "Pool exhausted\n");
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return NULL;
     }
 
     for (size_t i = 0; i < pool->pool_size; i++) {
         if (!pool->used[i]) {
             if (!pool->allocator.validate(pool->objects[i])) {
-                fprintf(stderr, "Invalid object at index %zu\n", i);
+                report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object at index");
                 continue; // Skip invalid objects
             }
             pool->used[i] = true;
@@ -210,21 +257,26 @@ void* pool_acquire(object_pool_t* pool) {
             pool->allocator.reset(pool->objects[i]);
             void* obj = pool->objects[i];
             uv_mutex_unlock(&pool->mutex);
+            pool->total_contention_time_ns += uv_hrtime() - start_time;
             return obj;
         }
     }
 
     uv_mutex_unlock(&pool->mutex);
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
     return NULL; // Should not reach here
 }
 
 bool pool_release(object_pool_t* pool, void* object) {
     if (!pool || !object) {
-        fprintf(stderr, "Invalid pool or object\n");
+        report_error(pool, POOL_ERROR_INVALID_POOL, "Invalid pool or object");
         return false;
     }
 
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
+
     // Check if object is in pool->objects to avoid invalid dereference
     bool is_pool_object = false;
     for (size_t i = 0; i < pool->pool_size; i++) {
@@ -234,13 +286,15 @@ bool pool_release(object_pool_t* pool, void* object) {
         }
     }
     if (!is_pool_object) {
-        fprintf(stderr, "Object not in pool\n");
+        report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
         uv_mutex_unlock(&pool->mutex);
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return false;
     }
     if (!pool->allocator.validate(object)) {
-        fprintf(stderr, "Invalid object\n");
+        report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object");
         uv_mutex_unlock(&pool->mutex);
+        pool->total_contention_time_ns += uv_hrtime() - start_time;
         return false;
     }
 
@@ -251,12 +305,14 @@ bool pool_release(object_pool_t* pool, void* object) {
             pool->release_count++;
             pool->allocator.reset(pool->objects[i]);
             uv_mutex_unlock(&pool->mutex);
+            pool->total_contention_time_ns += uv_hrtime() - start_time;
             return true;
         }
     }
 
+    report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid or unused object");
     uv_mutex_unlock(&pool->mutex);
-    fprintf(stderr, "Invalid or unused object\n");
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
     return false;
 }
 
@@ -265,8 +321,11 @@ size_t pool_used_count(object_pool_t* pool) {
         return 0;
     }
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
     size_t count = pool->used_count;
     uv_mutex_unlock(&pool->mutex);
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
     return count;
 }
 
@@ -279,10 +338,18 @@ void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
         return;
     }
     uv_mutex_lock(&pool->mutex);
+    pool->contention_attempts++;
+    uint64_t start_time = uv_hrtime();
     stats->max_used = pool->max_used;
     stats->acquire_count = pool->acquire_count;
     stats->release_count = pool->release_count;
+    stats->contention_attempts = pool->contention_attempts;
+    stats->total_contention_time_ns = pool->total_contention_time_ns;
+    stats->total_objects_allocated = pool->total_objects_allocated;
+    stats->grow_count = pool->grow_count;
+    stats->shrink_count = pool->shrink_count;
     uv_mutex_unlock(&pool->mutex);
+    pool->total_contention_time_ns += uv_hrtime() - start_time;
 }
 
 void pool_destroy(object_pool_t* pool) {
