@@ -1,0 +1,10 @@
+
+examples/test_pool.o
+
+src/object_pool.o
+
+tests/test_pool.o
+
+test_pool
+
+test_pool_tests
