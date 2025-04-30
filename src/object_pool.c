@@ -308,17 +308,22 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
             pool->allocator.free(sub->objects[j]);
         }
 
-        void** new_objects = realloc(sub->objects, new_size * sizeof(void*));
-        bool* new_used = realloc(sub->used, new_size * sizeof(bool));
-        if (!new_objects || !new_used) {
+        // Allocate temporary buffers
+        void** temp_objects = realloc(sub->objects, new_size * sizeof(void*));
+        bool* temp_used = realloc(sub->used, new_size * sizeof(bool));
+        if (!temp_objects || !temp_used) {
+            // Clean up temporary allocations
+            free(temp_objects);
+            free(temp_used);
             report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
             uv_mutex_unlock(&sub->mutex);
             sub->total_contention_time_ns += uv_hrtime() - start_time;
             return false;
         }
 
-        sub->objects = new_objects;
-        sub->used = new_used;
+        // Update pointers only after successful allocation
+        sub->objects = temp_objects;
+        sub->used = temp_used;
         sub->pool_size = new_size;
         if (sub->max_used > sub->pool_size) {
             sub->max_used = sub->pool_size;
