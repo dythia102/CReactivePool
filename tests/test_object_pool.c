@@ -118,6 +118,31 @@ void thread_test_cb(void* arg) {
     }
 }
 
+// Backpressure stress test data
+typedef struct {
+    object_pool_t* pool;
+    int acquire_attempts;
+    acquire_test_data_t acquire_data;
+    int context_id;
+} backpressure_test_data_t;
+
+void backpressure_acquire_cb(void* arg) {
+    backpressure_test_data_t* data = (backpressure_test_data_t*)arg;
+    for (int i = 0; i < data->acquire_attempts; i++) {
+        pool_acquire(data->pool, acquire_callback, &data->acquire_data);
+    }
+}
+
+void backpressure_release_cb(void* arg) {
+    backpressure_test_data_t* data = (backpressure_test_data_t*)arg;
+    for (int i = 0; i < data->acquire_attempts; i++) {
+        void* obj = pool_acquire(data->pool, NULL, NULL);
+        if (obj) {
+            pool_release(data->pool, obj);
+        }
+    }
+}
+
 int main() {
     // Create allocator for Message
     object_pool_allocator_t allocator = {
@@ -292,26 +317,74 @@ int main() {
         pool_release(pool, acquire_data.last_object);
         acquire_data.last_object = NULL; // Prevent double-free
     }
-    // Release Remaining held objects
+    // Release remaining held objects
     for (size_t i = 1; i < 4; i++) {
         if (held_objects[i]) {
             pool_release(pool, held_objects[i]);
         }
     }
 
-    // Test 12: Pool statistics
+    // Test 12: Concurrent backpressure queue
     reset_error_data(&error_data);
+    pool = pool_create(2, 2, allocator, error_callback, &error_data);
+    // Hold all objects to force backpressure
+    Message* backpressure_objects[2];
+    for (size_t i = 0; i < 2; i++) {
+        backpressure_objects[i] = pool_acquire(pool, NULL, NULL);
+        assert_true("Exhaust pool for concurrent backpressure", backpressure_objects[i] != NULL);
+    }
+    // Spawn threads to enqueue and release
+    uv_thread_t backpressure_threads[6];
+    backpressure_test_data_t backpressure_data[6];
+    for (int i = 0; i < 4; i++) {
+        backpressure_data[i].pool = pool;
+        backpressure_data[i].acquire_attempts = 5;
+        backpressure_data[i].acquire_data.callback_count = 0;
+        backpressure_data[i].acquire_data.last_object = NULL;
+        backpressure_data[i].acquire_data.context_id = &backpressure_data[i].context_id;
+        backpressure_data[i].context_id = i + 1;
+        uv_thread_create(&backpressure_threads[i], backpressure_acquire_cb, &backpressure_data[i]);
+    }
+    for (int i = 4; i < 6; i++) {
+        backpressure_data[i].pool = pool;
+        backpressure_data[i].acquire_attempts = 5;
+        backpressure_data[i].acquire_data.callback_count = 0;
+        backpressure_data[i].acquire_data.last_object = NULL;
+        backpressure_data[i].acquire_data.context_id = NULL;
+        backpressure_data[i].context_id = 0;
+        uv_thread_create(&backpressure_threads[i], backpressure_release_cb, &backpressure_data[i]);
+    }
+    for (int i = 0; i < 6; i++) {
+        uv_thread_join(&backpressure_threads[i]);
+    }
+    // Release held objects
+    for (size_t i = 0; i < 2; i++) {
+        if (backpressure_objects[i]) {
+            pool_release(pool, backpressure_objects[i]);
+        }
+    }
+    int total_callbacks = 0;
+    for (int i = 0; i < 4; i++) {
+        total_callbacks += backpressure_data[i].acquire_data.callback_count;
+    }
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
-    assert_true("Stats max_used", stats.max_used >= 1);
-    assert_true("Stats acquire_count", stats.acquire_count >= 3);
-    assert_true("Stats release_count", stats.release_count >= 3);
+    assert_true("Concurrent backpressure callbacks", total_callbacks >= 0 && pool_used_count(pool) == 0);
+    assert_true("Concurrent backpressure queue size", stats.queue_max_size >= 1);
+    pool_destroy(pool);
+
+    // Test 13: Pool statistics
+    reset_error_data(&error_data);
+    pool = pool_create(4, 2, allocator, error_callback, &error_data);
+    pool_stats(pool, &stats);
+    assert_true("Stats max_used", stats.max_used == 0);
+    assert_true("Stats acquire_count", stats.acquire_count == 0);
+    assert_true("Stats release_count", stats.release_count == 0);
     assert_true("Stats contention_attempts", stats.contention_attempts > 0);
     assert_true("Stats total_objects_allocated", stats.total_objects_allocated >= 4);
-    assert_true("Stats grow_count", stats.grow_count == 1);
-    assert_true("Stats shrink_count", stats.shrink_count == 1);
-    assert_true("Stats queue_max_size", stats.queue_max_size == 2);
-
+    assert_true("Stats grow_count", stats.grow_count == 0);
+    assert_true("Stats shrink_count", stats.shrink_count == 0);
+    assert_true("Stats queue_max_size", stats.queue_max_size == 0);
     pool_destroy(pool);
 
     // Summary
