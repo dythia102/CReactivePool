@@ -8,17 +8,18 @@
 #define DEFAULT_POOL_SIZE 16
 #define DEFAULT_SUB_POOL_COUNT 4
 #define DEFAULT_QUEUE_CAPACITY 32
+#define DEFAULT_OBJECT_SIZE 64 // Default size for objects in pool_create_default_with_size
 
 // Allocator interface for custom objects
 typedef struct {
-    void* (*alloc)(void);          // Allocate a single object
-    void (*free)(void*);           // Free a single object
-    void (*reset)(void*);          // Reset object to default state (optional)
-    bool (*validate)(void*);       // Validate object integrity (optional)
-    void (*on_create)(void*);      // Called after object creation (optional)
-    void (*on_destroy)(void*);     // Called before object destruction (optional)
-    void (*on_reuse)(void*);       // Called before object reuse (optional)
-    void* user_data;               // Optional user data for allocator
+    void* (*alloc)(void* user_data);          // Allocate a single object
+    void (*free)(void* obj, void* user_data); // Free a single object
+    void (*reset)(void* obj, void* user_data); // Reset object to default state (optional)
+    bool (*validate)(void* obj, void* user_data); // Validate object integrity (optional)
+    void (*on_create)(void* obj, void* user_data); // Called after object creation (optional)
+    void (*on_destroy)(void* obj, void* user_data); // Called before object destruction (optional)
+    void (*on_reuse)(void* obj, void* user_data); // Called before object reuse (optional)
+    void* user_data;                          // Optional user data for allocator
 } object_pool_allocator_t;
 
 // Error types
@@ -60,8 +61,11 @@ typedef struct object_pool object_pool_t;
 object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_allocator_t allocator,
                            object_pool_error_callback_t error_callback, void* error_context);
 
-// Create a thread-safe pool with default size (16) and default allocator
+// Create a thread-safe pool with default size (16), sub-pool count (4), and default allocator
 object_pool_t* pool_create_default(void);
+
+// Create a thread-safe pool with default size (16), sub-pool count (4), and default allocator with specified object size
+object_pool_t* pool_create_default_with_size(size_t object_size);
 
 // Grow the pool by adding more objects
 bool pool_grow(object_pool_t* pool, size_t additional_size);

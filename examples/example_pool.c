@@ -12,7 +12,8 @@ typedef struct {
 } Message;
 
 // Allocator for Message
-static void* message_alloc(void) {
+static void* message_alloc(void* user_data) {
+    (void)user_data; // Unused
     Message* msg = malloc(sizeof(Message));
     if (msg) {
         msg->magic = 0xDEADBEEF;
@@ -22,30 +23,36 @@ static void* message_alloc(void) {
     return msg;
 }
 
-static void message_free(void* obj) {
+static void message_free(void* obj, void* user_data) {
+    (void)user_data; // Unused
     free(obj);
 }
 
-static void message_reset(void* obj) {
+static void message_reset(void* obj, void* user_data) {
+    (void)user_data; // Unused
     Message* msg = (Message*)obj;
     msg->magic = 0xDEADBEEF;
     msg->text[0] = '\0';
     msg->id = 0;
 }
 
-static bool message_validate(void* obj) {
+static bool message_validate(void* obj, void* user_data) {
+    (void)user_data; // Unused
     return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
-static void message_on_create(void* obj) {
+static void message_on_create(void* obj, void* user_data) {
+    (void)user_data;
     printf("Created message: %p\n", obj);
 }
 
-static void message_on_destroy(void* obj) {
+static void message_on_destroy(void* obj, void* user_data) {
+    (void)user_data;
     printf("Destroyed message: %p\n", obj);
 }
 
-static void message_on_reuse(void* obj) {
+static void message_on_reuse(void* obj, void* user_data) {
+    (void)user_data;
     printf("Reusing message: %p\n", obj);
 }
 
@@ -153,12 +160,12 @@ int main() {
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
     printf("Stats: max_used=%zu, acquires=%zu, releases=%zu, contention_attempts=%zu, "
-        "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu, "
-        "queue_max=%zu, queue_grows=%zu\n",
-        stats.max_used, stats.acquire_count, stats.release_count,
-        stats.contention_attempts, stats.total_contention_time_ns,
-        stats.total_objects_allocated, stats.grow_count, stats.shrink_count,
-        stats.queue_max_size, stats.queue_grow_count);
+           "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu, "
+           "queue_max=%zu, queue_grows=%zu\n",
+           stats.max_used, stats.acquire_count, stats.release_count,
+           stats.contention_attempts, stats.total_contention_time_ns,
+           stats.total_objects_allocated, stats.grow_count, stats.shrink_count,
+           stats.queue_max_size, stats.queue_grow_count);
 
     // Clean up
     pool_destroy(pool);

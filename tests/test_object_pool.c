@@ -11,7 +11,8 @@ typedef struct {
     int id;
 } Message;
 
-static void* message_alloc(void) {
+static void* message_alloc(void* user_data) {
+    (void)user_data; // Unused
     Message* msg = malloc(sizeof(Message));
     if (msg) {
         msg->magic = 0xDEADBEEF;
@@ -21,31 +22,39 @@ static void* message_alloc(void) {
     return msg;
 }
 
-static void message_free(void* obj) {
+static void message_free(void* obj, void* user_data) {
+    (void)user_data; // Unused
     free(obj);
 }
 
-static void message_reset(void* obj) {
+static void message_reset(void* obj, void* user_data) {
+    (void)user_data; // Unused
     Message* msg = (Message*)obj;
-    msg->magic = 0xDEADBEEF;
-    msg->text[0] = '\0';
-    msg->id = 0;
+    if (msg) {
+        msg->magic = 0xDEADBEEF;
+        msg->text[0] = '\0';
+        msg->id = 0;
+    }
 }
 
-static bool message_validate(void* obj) {
+static bool message_validate(void* obj, void* user_data) {
+    (void)user_data; // Unused
     return obj && ((Message*)obj)->magic == 0xDEADBEEF;
 }
 
-static void message_on_create(void* obj) {
-    (void)obj; // Suppress unused parameter warning
+static void message_on_create(void* obj, void* user_data) {
+    (void)obj;
+    (void)user_data;
 }
 
-static void message_on_destroy(void* obj) {
-    (void)obj; // Suppress unused parameter warning
+static void message_on_destroy(void* obj, void* user_data) {
+    (void)obj;
+    (void)user_data;
 }
 
-static void message_on_reuse(void* obj) {
-    (void)obj; // Suppress unused parameter warning
+static void message_on_reuse(void* obj, void* user_data) {
+    (void)obj;
+    (void)user_data;
 }
 
 // Error callback test data
@@ -229,11 +238,20 @@ int main() {
 
     // Test 5: Default pool
     reset_error_data(&error_data);
-    pool = pool_create_default();
+    pool = pool_create_default_with_size(64); // Use realistic object size
     assert_true("Default pool creation", pool != NULL);
     assert_true("Default pool capacity", pool_capacity(pool) == DEFAULT_POOL_SIZE);
     void* obj = pool_acquire(pool, NULL, NULL);
     assert_true("Acquire from default pool", obj != NULL);
+    // Verify object is initialized to zero
+    bool is_zero = true;
+    for (size_t i = 0; i < 64; i++) {
+        if (((char*)obj)[i] != 0) {
+            is_zero = false;
+            break;
+        }
+    }
+    assert_true("Default object initialized", is_zero);
     assert_true("Release to default pool", pool_release(pool, obj));
     pool_destroy(pool);
 
