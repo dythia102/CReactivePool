@@ -50,6 +50,7 @@ typedef struct {
     size_t grow_count;             // Number of grow operations
     size_t shrink_count;           // Number of shrink operations
     size_t queue_max_size;         // Max queue size for backpressure
+    size_t queue_grow_count;       // Number of queue growth operations
 } object_pool_stats_t;
 
 // Opaque pool type
@@ -64,6 +65,9 @@ object_pool_t* pool_create_default(void);
 
 // Grow the pool by adding more objects
 bool pool_grow(object_pool_t* pool, size_t additional_size);
+
+// Grow the request queue by adding more capacity
+bool pool_grow_queue(object_pool_t* pool, size_t additional_capacity);
 
 // Shrink the pool by removing unused objects
 bool pool_shrink(object_pool_t* pool, size_t reduce_size);

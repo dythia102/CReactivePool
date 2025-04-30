@@ -345,25 +345,25 @@ int main() {
     backpressure_test_data_t backpressure_data[6];
     for (int i = 0; i < 4; i++) {
         backpressure_data[i].pool = pool;
-        backpressure_data[i].acquire_attempts = 5;
+        backpressure_data[i].acquire_attempts = 15; // Exceed DEFAULT_QUEUE_CAPACITY
         backpressure_data[i].acquire_data.callback_count = 0;
         backpressure_data[i].acquire_data.last_object = NULL;
         backpressure_data[i].acquire_data.context_id = &backpressure_data[i].context_id;
-        backpressure_data[i].acquire_data.callback_objects = malloc(5 * sizeof(Message*)); // Capacity for 5 objects
+        backpressure_data[i].acquire_data.callback_objects = malloc(15 * sizeof(Message*));
         backpressure_data[i].acquire_data.callback_objects_count = 0;
-        backpressure_data[i].acquire_data.callback_objects_capacity = 5;
+        backpressure_data[i].acquire_data.callback_objects_capacity = 15;
         backpressure_data[i].context_id = i + 1;
         uv_thread_create(&backpressure_threads[i], backpressure_acquire_cb, &backpressure_data[i]);
     }
     for (int i = 4; i < 6; i++) {
         backpressure_data[i].pool = pool;
-        backpressure_data[i].acquire_attempts = 5;
+        backpressure_data[i].acquire_attempts = 10;
         backpressure_data[i].acquire_data.callback_count = 0;
         backpressure_data[i].acquire_data.last_object = NULL;
         backpressure_data[i].acquire_data.context_id = NULL;
-        backpressure_data[i].acquire_data.callback_objects = malloc(5 * sizeof(Message*)); // Capacity for 5 objects
+        backpressure_data[i].acquire_data.callback_objects = malloc(10 * sizeof(Message*));
         backpressure_data[i].acquire_data.callback_objects_count = 0;
-        backpressure_data[i].acquire_data.callback_objects_capacity = 5;
+        backpressure_data[i].acquire_data.callback_objects_capacity = 10;
         backpressure_data[i].context_id = 0;
         uv_thread_create(&backpressure_threads[i], backpressure_release_cb, &backpressure_data[i]);
     }
@@ -393,6 +393,7 @@ int main() {
     pool_stats(pool, &stats);
     assert_true("Concurrent backpressure callbacks", total_callbacks >= 0 && pool_used_count(pool) == 0);
     assert_true("Concurrent backpressure queue size", stats.queue_max_size >= 1);
+    assert_true("Queue capacity growth", stats.queue_grow_count > 0);
     pool_destroy(pool);
 
     // Test 13: Pool statistics

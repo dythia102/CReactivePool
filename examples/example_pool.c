@@ -153,11 +153,12 @@ int main() {
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
     printf("Stats: max_used=%zu, acquires=%zu, releases=%zu, contention_attempts=%zu, "
-           "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu, queue_max=%zu\n",
-           stats.max_used, stats.acquire_count, stats.release_count,
-           stats.contention_attempts, stats.total_contention_time_ns,
-           stats.total_objects_allocated, stats.grow_count, stats.shrink_count,
-           stats.queue_max_size);
+        "contention_time_ns=%" PRIu64 ", total_objects=%zu, grows=%zu, shrinks=%zu, "
+        "queue_max=%zu, queue_grows=%zu\n",
+        stats.max_used, stats.acquire_count, stats.release_count,
+        stats.contention_attempts, stats.total_contention_time_ns,
+        stats.total_objects_allocated, stats.grow_count, stats.shrink_count,
+        stats.queue_max_size, stats.queue_grow_count);
 
     // Clean up
     pool_destroy(pool);

@@ -34,6 +34,7 @@ struct object_pool {
     size_t queue_size;            // Current queue size
     size_t queue_capacity;        // Max queue size
     size_t queue_max_size;        // Max observed queue size
+    size_t queue_grow_count;      // Number of queue growth operations
     object_pool_allocator_t allocator; // Allocator for objects
     object_pool_error_callback_t error_callback; // Error callback
     void* error_context;          // Error callback context
@@ -119,6 +120,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
     pool->queue_size = 0;
     pool->queue_capacity = DEFAULT_QUEUE_CAPACITY;
     pool->queue_max_size = 0;
+    pool->queue_grow_count = 0;
     pool->allocator = allocator;
     pool->error_callback = error_callback;
     pool->error_context = error_context;
@@ -345,6 +347,29 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
     return true;
 }
 
+bool pool_grow_queue(object_pool_t* pool, size_t additional_capacity) {
+    if (!pool || additional_capacity == 0) {
+        report_error(pool, POOL_ERROR_INVALID_SIZE, "Invalid pool or additional capacity");
+        return false;
+    }
+
+    uv_mutex_lock(&pool->queue_mutex);
+    size_t new_capacity = pool->queue_capacity + additional_capacity;
+    acquire_request_t* new_queue = realloc(pool->request_queue, new_capacity * sizeof(acquire_request_t));
+    if (!new_queue) {
+        uv_mutex_unlock(&pool->queue_mutex);
+        report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to grow request queue");
+        return false;
+    }
+    // Initialize new portion of queue
+    memset(new_queue + pool->queue_capacity, 0, additional_capacity * sizeof(acquire_request_t));
+    pool->request_queue = new_queue;
+    pool->queue_capacity = new_capacity;
+    pool->queue_grow_count++;
+    uv_mutex_unlock(&pool->queue_mutex);
+    return true;
+}
+
 void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback, void* context) {
     if (!pool) {
         report_error(NULL, POOL_ERROR_INVALID_POOL, "Invalid pool");
@@ -399,6 +424,18 @@ void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback,
         uv_mutex_unlock(&pool->queue_mutex);
     }
 
+    // Try to grow queue
+    if (callback && pool_grow_queue(pool, pool->queue_capacity)) { // Double capacity
+        uv_mutex_lock(&pool->queue_mutex);
+        pool->request_queue[pool->queue_size++] = (acquire_request_t){callback, context};
+        if (pool->queue_size > pool->queue_max_size) {
+            pool->queue_max_size = pool->queue_size;
+        }
+        uv_mutex_unlock(&pool->queue_mutex);
+        return NULL;
+    }
+
+    // Report appropriate error based on callback presence
     report_error(pool, callback ? POOL_ERROR_QUEUE_FULL : POOL_ERROR_EXHAUSTED,
                  callback ? "Request queue full" : "Pool exhausted");
     return NULL;
@@ -535,6 +572,7 @@ void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
     stats->grow_count = pool->grow_count;
     stats->shrink_count = pool->shrink_count;
     stats->queue_max_size = pool->queue_max_size;
+    stats->queue_grow_count = pool->queue_grow_count;
 }
 
 void pool_destroy(object_pool_t* pool) {
