@@ -68,6 +68,9 @@ typedef struct {
     int callback_count;
     Message* last_object;
     int* context_id;
+    Message** callback_objects; // Array to store callback-acquired objects
+    size_t callback_objects_count; // Number of callback objects
+    size_t callback_objects_capacity; // Capacity of callback objects array
 } acquire_test_data_t;
 
 static void acquire_callback(void* object, void* context) {
@@ -77,6 +80,10 @@ static void acquire_callback(void* object, void* context) {
     data->last_object = (Message*)object;
     if (data->context_id) {
         data->last_object->id = *(data->context_id);
+    }
+    // Store callback object for later release
+    if (data->callback_objects_count < data->callback_objects_capacity) {
+        data->callback_objects[data->callback_objects_count++] = (Message*)object;
     }
 }
 
@@ -342,6 +349,9 @@ int main() {
         backpressure_data[i].acquire_data.callback_count = 0;
         backpressure_data[i].acquire_data.last_object = NULL;
         backpressure_data[i].acquire_data.context_id = &backpressure_data[i].context_id;
+        backpressure_data[i].acquire_data.callback_objects = malloc(5 * sizeof(Message*)); // Capacity for 5 objects
+        backpressure_data[i].acquire_data.callback_objects_count = 0;
+        backpressure_data[i].acquire_data.callback_objects_capacity = 5;
         backpressure_data[i].context_id = i + 1;
         uv_thread_create(&backpressure_threads[i], backpressure_acquire_cb, &backpressure_data[i]);
     }
@@ -351,6 +361,9 @@ int main() {
         backpressure_data[i].acquire_data.callback_count = 0;
         backpressure_data[i].acquire_data.last_object = NULL;
         backpressure_data[i].acquire_data.context_id = NULL;
+        backpressure_data[i].acquire_data.callback_objects = malloc(5 * sizeof(Message*)); // Capacity for 5 objects
+        backpressure_data[i].acquire_data.callback_objects_count = 0;
+        backpressure_data[i].acquire_data.callback_objects_capacity = 5;
         backpressure_data[i].context_id = 0;
         uv_thread_create(&backpressure_threads[i], backpressure_release_cb, &backpressure_data[i]);
     }
@@ -362,6 +375,15 @@ int main() {
         if (backpressure_objects[i]) {
             pool_release(pool, backpressure_objects[i]);
         }
+    }
+    // Release callback-acquired objects
+    for (int i = 0; i < 6; i++) {
+        for (size_t j = 0; j < backpressure_data[i].acquire_data.callback_objects_count; j++) {
+            if (backpressure_data[i].acquire_data.callback_objects[j]) {
+                pool_release(pool, backpressure_data[i].acquire_data.callback_objects[j]);
+            }
+        }
+        free(backpressure_data[i].acquire_data.callback_objects);
     }
     int total_callbacks = 0;
     for (int i = 0; i < 4; i++) {
