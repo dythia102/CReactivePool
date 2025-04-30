@@ -93,6 +93,13 @@ void assert_true(const char* test_name, bool condition) {
     }
 }
 
+// Helper function to reset error data
+static void reset_error_data(error_test_data_t* error_data) {
+    error_data->error_count = 0;
+    error_data->last_error = POOL_ERROR_NONE;
+    error_data->last_message[0] = '\0';
+}
+
 // Thread test data
 typedef struct {
     object_pool_t* pool;
@@ -124,8 +131,12 @@ int main() {
         .user_data = NULL
     };
 
+    // Initialize error data
+    error_test_data_t error_data;
+    reset_error_data(&error_data);
+
     // Test 1: Create and destroy pool
-    error_test_data_t error_data = {0};
+    reset_error_data(&error_data);
     object_pool_t* pool = pool_create(4, 2, allocator, error_callback, &error_data);
     assert_true("Pool creation", pool != NULL);
     assert_true("Pool capacity", pool_capacity(pool) == 4);
@@ -133,6 +144,7 @@ int main() {
     pool_destroy(pool);
 
     // Test 2: Acquire and release objects
+    reset_error_data(&error_data);
     pool = pool_create(4, 2, allocator, error_callback, &error_data);
     Message* msg1 = pool_acquire(pool, NULL, NULL);
     assert_true("Acquire first object", msg1 != NULL);
@@ -153,6 +165,7 @@ int main() {
     assert_true("Used count after all releases", pool_used_count(pool) == 0);
 
     // Test 3: Pool exhaustion
+    reset_error_data(&error_data);
     Message* messages[5];
     int acquired = 0;
     for (size_t i = 0; i < 5; i++) {
@@ -174,6 +187,7 @@ int main() {
     assert_true("Used count after releasing all", pool_used_count(pool) == 0);
 
     // Test 4: Invalid operations
+    reset_error_data(&error_data);
     assert_true("Release invalid object", !pool_release(pool, (void*)0xDEADBEEF));
     assert_true("Invalid object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
     assert_true("Acquire from null pool", pool_acquire(NULL, NULL, NULL) == NULL);
@@ -182,6 +196,7 @@ int main() {
     assert_true("Destroy null pool", true);
 
     // Test 5: Default pool
+    reset_error_data(&error_data);
     pool = pool_create_default();
     assert_true("Default pool creation", pool != NULL);
     assert_true("Default pool capacity", pool_capacity(pool) == DEFAULT_POOL_SIZE);
@@ -191,6 +206,7 @@ int main() {
     pool_destroy(pool);
 
     // Test 6: Thread safety
+    reset_error_data(&error_data);
     pool = pool_create(4, 2, allocator, error_callback, &error_data);
     uv_thread_t threads[4];
     thread_test_data_t thread_data[4];
@@ -210,6 +226,7 @@ int main() {
     assert_true("Thread-safe acquire/release", total_success <= 40 && pool_used_count(pool) == 0);
 
     // Test 7: Reset on reuse
+    reset_error_data(&error_data);
     Message* msg3 = pool_acquire(pool, NULL, NULL);
     assert_true("Acquire for reset test", msg3 != NULL);
     strcpy(msg3->text, "Temporary");
@@ -220,6 +237,7 @@ int main() {
     pool_release(pool, msg4);
 
     // Test 8: Dynamic resizing (grow)
+    reset_error_data(&error_data);
     size_t old_capacity = pool_capacity(pool);
     assert_true("Grow pool", pool_grow(pool, 2));
     assert_true("New capacity after grow", pool_capacity(pool) == old_capacity + 2);
@@ -229,6 +247,7 @@ int main() {
     pool_release(pool, new_msg);
 
     // Test 9: Dynamic resizing (shrink)
+    reset_error_data(&error_data);
     assert_true("Shrink pool", pool_shrink(pool, 2));
     assert_true("New capacity after shrink", pool_capacity(pool) == old_capacity);
     new_msg = pool_acquire(pool, NULL, NULL);
@@ -236,6 +255,7 @@ int main() {
     pool_release(pool, new_msg);
 
     // Test 10: Object validation
+    reset_error_data(&error_data);
     Message invalid_msg = { .magic = 0xBADBAD };
     assert_true("Release invalid object (bad magic)", !pool_release(pool, &invalid_msg));
     msg3 = pool_acquire(pool, NULL, NULL);
@@ -245,6 +265,7 @@ int main() {
     pool_release(pool, msg3);
 
     // Test 11: Backpressure
+    reset_error_data(&error_data);
     acquire_test_data_t acquire_data = {0};
     int callback_id = 5;
     acquire_data.context_id = &callback_id;
@@ -271,7 +292,7 @@ int main() {
         pool_release(pool, acquire_data.last_object);
         acquire_data.last_object = NULL; // Prevent double-free
     }
-    // Release remaining held objects
+    // Release Remaining held objects
     for (size_t i = 1; i < 4; i++) {
         if (held_objects[i]) {
             pool_release(pool, held_objects[i]);
@@ -279,6 +300,7 @@ int main() {
     }
 
     // Test 12: Pool statistics
+    reset_error_data(&error_data);
     object_pool_stats_t stats;
     pool_stats(pool, &stats);
     assert_true("Stats max_used", stats.max_used >= 1);

@@ -10,3 +10,12 @@ test_pool
 test_pool_tests
 
 *.o
+.vscode/c_cpp_properties.json
+
+.vscode/settings.json
+
+aio
+
+bin/example_pool
+
+bin/test_object_pool

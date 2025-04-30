@@ -6,13 +6,13 @@ LDFLAGS = -luv
 SRC = src/object_pool.c
 OBJ = $(SRC:.c=.o)
 
-EXAMPLE_SRC = examples/test_pool.c
+EXAMPLE_SRC = examples/example_pool.c
 EXAMPLE_OBJ = $(EXAMPLE_SRC:.c=.o)
-EXAMPLE_BIN = test_pool
+EXAMPLE_BIN = bin/example_pool
 
-TEST_SRC = tests/test_pool.c
+TEST_SRC = tests/test_object_pool.c
 TEST_OBJ = $(TEST_SRC:.c=.o)
-TEST_BIN = test_pool_tests
+TEST_BIN = bin/test_object_pool
 
 # Default target
 all: $(EXAMPLE_BIN) $(TEST_BIN)
