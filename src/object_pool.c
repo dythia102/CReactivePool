@@ -37,6 +37,7 @@ struct object_pool {
     object_pool_allocator_t allocator; // Allocator for objects
     object_pool_error_callback_t error_callback; // Error callback
     void* error_context;          // Error callback context
+    uv_mutex_t queue_mutex;       // Mutex for request_queue
 };
 
 // Default allocator for plain void* (uses malloc/free)
@@ -127,6 +128,14 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
     if (!pool->allocator.on_destroy) pool->allocator.on_destroy = default_on_destroy;
     if (!pool->allocator.on_reuse) pool->allocator.on_reuse = default_on_reuse;
 
+    if (uv_mutex_init(&pool->queue_mutex) != 0) {
+        report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to initialize queue mutex");
+        free(pool->request_queue);
+        free(pool->sub_pools);
+        free(pool);
+        return NULL;
+    }
+
     size_t base_size = pool_size / sub_pool_count;
     size_t remainder = pool_size % sub_pool_count;
     for (size_t i = 0; i < sub_pool_count; i++) {
@@ -148,6 +157,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             }
             free(pool->sub_pools);
             free(pool->request_queue);
+            uv_mutex_destroy(&pool->queue_mutex);
             free(pool);
             return NULL;
         }
@@ -164,6 +174,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             }
             free(pool->sub_pools);
             free(pool->request_queue);
+            uv_mutex_destroy(&pool->queue_mutex);
             free(pool);
             return NULL;
         }
@@ -194,6 +205,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
                 free(sub->used);
                 free(pool->sub_pools);
                 free(pool->request_queue);
+                uv_mutex_destroy(&pool->queue_mutex);
                 free(pool);
                 return NULL;
             }
@@ -308,11 +320,9 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
             pool->allocator.free(sub->objects[j]);
         }
 
-        // Allocate temporary buffers
         void** temp_objects = realloc(sub->objects, new_size * sizeof(void*));
         bool* temp_used = realloc(sub->used, new_size * sizeof(bool));
         if (!temp_objects || !temp_used) {
-            // Clean up temporary allocations
             free(temp_objects);
             free(temp_used);
             report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
@@ -321,7 +331,6 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
             return false;
         }
 
-        // Update pointers only after successful allocation
         sub->objects = temp_objects;
         sub->used = temp_used;
         sub->pool_size = new_size;
@@ -378,11 +387,16 @@ void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback,
 
     // Pool exhausted, try backpressure
     if (callback && pool->queue_size < pool->queue_capacity) {
-        pool->request_queue[pool->queue_size++] = (acquire_request_t){callback, context};
-        if (pool->queue_size > pool->queue_max_size) {
-            pool->queue_max_size = pool->queue_size;
+        uv_mutex_lock(&pool->queue_mutex);
+        if (pool->queue_size < pool->queue_capacity) {
+            pool->request_queue[pool->queue_size++] = (acquire_request_t){callback, context};
+            if (pool->queue_size > pool->queue_max_size) {
+                pool->queue_max_size = pool->queue_size;
+            }
+            uv_mutex_unlock(&pool->queue_mutex);
+            return NULL;
         }
-        return NULL;
+        uv_mutex_unlock(&pool->queue_mutex);
     }
 
     report_error(pool, callback ? POOL_ERROR_QUEUE_FULL : POOL_ERROR_EXHAUSTED,
@@ -433,20 +447,26 @@ bool pool_release(object_pool_t* pool, void* object) {
 
         // Process backpressure queue
         if (pool->queue_size > 0) {
-            acquire_request_t req = pool->request_queue[0];
-            for (size_t i = 1; i < pool->queue_size; i++) {
-                pool->request_queue[i - 1] = pool->request_queue[i];
-            }
-            pool->queue_size--;
-            if (req.callback && pool->allocator.validate(object)) {
-                sub->used[obj_idx] = true;
-                sub->used_count++;
-                sub->acquire_count++;
-                pool->allocator.on_reuse(object);
-                req.callback(object, req.context);
-                uv_mutex_unlock(&sub->mutex);
-                sub->total_contention_time_ns += uv_hrtime() - start_time;
-                return true;
+            uv_mutex_lock(&pool->queue_mutex);
+            if (pool->queue_size > 0) {
+                acquire_request_t req = pool->request_queue[0];
+                for (size_t i = 1; i < pool->queue_size; i++) {
+                    pool->request_queue[i - 1] = pool->request_queue[i];
+                }
+                pool->queue_size--;
+                uv_mutex_unlock(&pool->queue_mutex);
+                if (req.callback && pool->allocator.validate(object)) {
+                    sub->used[obj_idx] = true;
+                    sub->used_count++;
+                    sub->acquire_count++;
+                    pool->allocator.on_reuse(object);
+                    req.callback(object, req.context);
+                    uv_mutex_unlock(&sub->mutex);
+                    sub->total_contention_time_ns += uv_hrtime() - start_time;
+                    return true;
+                }
+            } else {
+                uv_mutex_unlock(&pool->queue_mutex);
             }
         }
 
@@ -534,5 +554,6 @@ void pool_destroy(object_pool_t* pool) {
     }
     free(pool->sub_pools);
     free(pool->request_queue);
+    uv_mutex_destroy(&pool->queue_mutex);
     free(pool);
 }

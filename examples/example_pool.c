@@ -126,11 +126,23 @@ int main() {
 
     // Test backpressure
     int callback_id = 3;
+    Message* held_objects[6];
+    size_t acquired_count = 0;
     for (size_t i = 0; i < 6; i++) {
-        pool_acquire(pool, acquire_callback, &callback_id);
+        held_objects[i] = pool_acquire(pool, acquire_callback, &callback_id);
+        if (held_objects[i]) {
+            acquired_count++;
+        }
     }
 
-    // Release an object to trigger backpressure callback
+    // Release acquired objects to trigger backpressure callbacks
+    for (size_t i = 0; i < acquired_count; i++) {
+        if (held_objects[i]) {
+            pool_release(pool, held_objects[i]);
+        }
+    }
+
+    // Acquire and release one more object
     Message* msg3 = pool_acquire(pool, NULL, NULL);
     if (msg3) {
         printf("Acquired msg3: text=%s, id=%d\n", msg3->text, msg3->id);
