@@ -14,6 +14,8 @@
  *
  * The implementation is optimized for high-performance, low-memory applications, with
  * robust error handling and thread-safe operations.
+ *
+ * Debug output can be enabled by defining DEBUG (e.g., -DDEBUG in compiler flags).
  */
 
  #include "object_pool.h"
@@ -823,7 +825,9 @@
      }
  
      if (!is_valid_object) {
+ #ifdef DEBUG
          printf("DEBUG: Invalid object pointer: %p\n", object);
+ #endif
          report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
          return false;
      }
@@ -833,19 +837,32 @@
      size_t metadata_idx = 0;
      get_metadata(pool, object, &metadata_sub, &metadata_idx);
      if (!metadata_sub || metadata_idx >= metadata_sub->pool_size || metadata_sub->objects[metadata_idx] != object) {
+ #ifdef DEBUG
          printf("DEBUG: Invalid metadata for object: %p\n", object);
+ #endif
          report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object metadata");
          return false;
      }
      sub = metadata_sub;
      obj_idx = metadata_idx;
  
+     // Validate sub-pool and index
+     if (obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
+ #ifdef DEBUG
+         printf("DEBUG: Metadata mismatch for object: %p\n", object);
+ #endif
+         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
+         return false;
+     }
+ 
      pthread_mutex_lock(&sub->mutex);
      sub->contention_attempts++;
      uint64_t start_time = get_hrtime();
  
      if (!pool->allocator.validate(object, pool->allocator.user_data)) {
+ #ifdef DEBUG
          printf("DEBUG: Object validation failed: %p\n", object);
+ #endif
          report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object");
          pthread_mutex_unlock(&sub->mutex);
          sub->total_contention_time_ns += get_hrtime() - start_time;
@@ -853,14 +870,18 @@
      }
  
      if (sub->used[obj_idx]) {
+ #ifdef DEBUG
          printf("DEBUG: Releasing object %p, sub->used[%zu]=%d, used_count=%zu\n", 
                 object, obj_idx, sub->used[obj_idx], sub->used_count);
+ #endif
          sub->used[obj_idx] = false;
          sub->used_count--;
          sub->release_count++;
          pool->allocator.reset(object, pool->allocator.user_data);
+ #ifdef DEBUG
          printf("DEBUG: After release, sub->used[%zu]=%d, used_count=%zu\n", 
                 obj_idx, sub->used[obj_idx], sub->used_count);
+ #endif
  
          // Process backpressure queue
          if (pool->queue_size > 0) {
@@ -897,7 +918,9 @@
          return true;
      }
  
+ #ifdef DEBUG
      printf("DEBUG: Object %p already unused, sub->used[%zu]=%d\n", object, obj_idx, sub->used[obj_idx]);
+ #endif
      report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid or unused object");
      pthread_mutex_unlock(&sub->mutex);
      sub->total_contention_time_ns += get_hrtime() - start_time;

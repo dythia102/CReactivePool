@@ -226,7 +226,9 @@ int main() {
         messages[i] = pool_acquire(pool, NULL, NULL);
         if (messages[i]) {
             acquired++;
+#ifdef DEBUG
             printf("DEBUG: Acquired object %zu: %p\n", i, messages[i]);
+#endif
         }
     }
     assert_true("Acquire all objects", acquired == 4);
@@ -236,7 +238,9 @@ int main() {
     // Release all objects
     for (size_t i = 0; i < 4; i++) {
         if (messages[i]) {
+#ifdef DEBUG
             printf("DEBUG: Releasing object %zu: %p\n", i, messages[i]);
+#endif
             pool_release(pool, messages[i]);
             messages[i] = NULL; // Prevent double-free
         }
@@ -478,11 +482,15 @@ int main() {
     Message* test_objects[8] = { NULL };
     for (size_t i = 0; i < 8; i++) {
         test_objects[i] = pool_acquire(pool, NULL, NULL);
+#ifdef DEBUG
         printf("DEBUG: Acquired object %zu: %p\n", i, test_objects[i]);
+#endif
         assert_true("Acquire for lookup test", test_objects[i] != NULL);
     }
     // Release the last object (should use metadata for O(1) lookup)
+#ifdef DEBUG
     printf("DEBUG: Releasing test object: %p\n", test_objects[7]);
+#endif
     assert_true("Fast release lookup", pool_release(pool, test_objects[7]));
     test_objects[7] = NULL; // Prevent double-release
     // Verify pool state
@@ -491,7 +499,9 @@ int main() {
     size_t released_count = 0;
     for (size_t i = 0; i < 8; i++) {
         if (test_objects[i]) {
+#ifdef DEBUG
             printf("DEBUG: Releasing object %zu: %p\n", i, test_objects[i]);
+#endif
             assert_true("Release remaining object", pool_release(pool, test_objects[i]));
             released_count++;
             test_objects[i] = NULL; // Prevent double-release
@@ -549,7 +559,9 @@ int main() {
     for (size_t i = 0; i < 16; i++) {
         if (!pool_release(pool, metadata_objects[i])) {
             metadata_correct = false;
+#ifdef DEBUG
             printf("DEBUG: Failed to release object %zu: %p\n", i, metadata_objects[i]);
+#endif
             break;
         }
         metadata_objects[i] = NULL;
@@ -559,7 +571,9 @@ int main() {
         metadata_objects[i] = pool_acquire(pool, NULL, NULL);
         if (!metadata_objects[i]) {
             metadata_correct = false;
+#ifdef DEBUG
             printf("DEBUG: Failed to re-acquire object %zu\n", i);
+#endif
             break;
         }
     }
