@@ -4,8 +4,8 @@
 #include <uv.h>
 
 // Sub-pool structure
-typedef struct {
-    void** objects;               // Array of object pointers
+struct sub_pool {
+    void** objects;               // Array of user object pointers (point to user data, not metadata)
     bool* used;                   // Track object usage
     size_t pool_size;             // Number of objects in sub-pool
     size_t used_count;            // Number of used objects
@@ -15,7 +15,7 @@ typedef struct {
     size_t contention_attempts;   // Total mutex contention attempts
     uint64_t total_contention_time_ns; // Total mutex wait time
     uv_mutex_t mutex;             // Mutex for thread safety
-} sub_pool_t;
+};
 
 // Acquire request for backpressure
 typedef struct {
@@ -42,45 +42,58 @@ struct object_pool {
     uv_mutex_t queue_mutex;       // Mutex for request_queue
 };
 
+// Helper to access metadata from user object pointer
+static inline pool_object_metadata_t* get_metadata(void* user_obj) {
+    return (pool_object_metadata_t*)((char*)user_obj - sizeof(pool_object_metadata_t));
+}
+
 // Default allocator for generic memory blocks
 static void* default_alloc(void* user_data) {
     size_t object_size = user_data ? *(size_t*)user_data : DEFAULT_OBJECT_SIZE;
-    void* obj = malloc(object_size);
-    if (obj) {
-        memset(obj, 0, object_size); // Initialize to zero
+    // Allocate space for metadata + user object
+    void* block = malloc(sizeof(pool_object_metadata_t) + object_size);
+    if (!block) {
+        return NULL;
     }
-    return obj;
+    // Initialize user object to zero
+    void* user_obj = (char*)block + sizeof(pool_object_metadata_t);
+    memset(user_obj, 0, object_size);
+    // Metadata will be set by caller
+    return user_obj;
 }
 
-static void default_free(void* obj, void* user_data) {
+static void default_free(void* user_obj, void* user_data) {
     (void)user_data; // Unused
-    free(obj);
+    if (user_obj) {
+        // Free the entire block (metadata + user object)
+        free((char*)user_obj - sizeof(pool_object_metadata_t));
+    }
 }
 
-static void default_reset(void* obj, void* user_data) {
-    if (obj) {
+static void default_reset(void* user_obj, void* user_data) {
+    if (user_obj) {
         size_t object_size = user_data ? *(size_t*)user_data : DEFAULT_OBJECT_SIZE;
-        memset(obj, 0, object_size); // Reset to zero
+        memset(user_obj, 0, object_size); // Reset user object to zero
     }
 }
 
-static bool default_validate(void* obj, void* user_data) {
+static bool default_validate(void* user_obj, void* user_data) {
     (void)user_data; // Unused
-    return obj != NULL; // Basic validation: non-NULL pointer
+    return user_obj != NULL; // Basic validation: non-NULL pointer
 }
 
-static void default_on_create(void* obj, void* user_data) {
-    (void)obj;
+static void default_on_create(void* user_obj, void* user_data) {
+    (void)user_obj;
     (void)user_data;
 }
 
-static void default_on_destroy(void* obj, void* user_data) {
-    (void)obj;
+static void default_on_destroy(void* user_obj, void* user_data) {
+    (void)user_obj;
     (void)user_data;
 }
 
-static void default_on_reuse(void* obj, void* user_data) {
-    (void)obj;
+static void default_on_reuse(void* user_obj, void* user_data) {
+    (void)user_obj;
     (void)user_data;
 }
 
@@ -225,6 +238,10 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
                 free(pool);
                 return NULL;
             }
+            // Initialize metadata
+            pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+            metadata->sub_pool = sub;
+            metadata->index = j;
             sub->used[j] = false;
             pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
             pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
@@ -302,6 +319,10 @@ bool pool_grow(object_pool_t* pool, size_t additional_size) {
                 sub->total_contention_time_ns += uv_hrtime() - start_time;
                 return false;
             }
+            // Initialize metadata
+            pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+            metadata->sub_pool = sub;
+            metadata->index = j;
             sub->used[j] = false;
             pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
             pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
@@ -484,20 +505,13 @@ bool pool_release(object_pool_t* pool, void* object) {
         return false;
     }
 
-    // Find sub-pool containing the object
-    sub_pool_t* sub = NULL;
-    size_t obj_idx = 0;
-    for (size_t i = 0; i < pool->sub_pool_count; i++) {
-        for (size_t j = 0; j < pool->sub_pools[i].pool_size; j++) {
-            if (pool->sub_pools[i].objects[j] == object) {
-                sub = &pool->sub_pools[i];
-                obj_idx = j;
-                break;
-            }
-        }
-        if (sub) break;
-    }
-    if (!sub) {
+    // Use metadata for O(1) lookup
+    pool_object_metadata_t* metadata = get_metadata(object);
+    sub_pool_t* sub = metadata->sub_pool;
+    size_t obj_idx = metadata->index;
+
+    // Validate sub-pool and index
+    if (!sub || obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
         return false;
     }

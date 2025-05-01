@@ -10,6 +10,12 @@
 #define DEFAULT_QUEUE_CAPACITY 32
 #define DEFAULT_OBJECT_SIZE 64 // Default size for objects in pool_create_default_with_size
 
+// Metadata stored with each object for efficient lookup
+typedef struct {
+    struct sub_pool* sub_pool; // Pointer to owning sub-pool (opaque)
+    size_t index;              // Index in sub-pool's objects array
+} pool_object_metadata_t;
+
 // Allocator interface for custom objects
 typedef struct {
     void* (*alloc)(void* user_data);          // Allocate a single object
@@ -54,8 +60,9 @@ typedef struct {
     size_t queue_grow_count;       // Number of queue growth operations
 } object_pool_stats_t;
 
-// Opaque pool type
+// Opaque pool and sub-pool types
 typedef struct object_pool object_pool_t;
+typedef struct sub_pool sub_pool_t;
 
 // Create a thread-safe pool with specified size, sub-pool count, allocator, and optional error callback
 object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_allocator_t allocator,

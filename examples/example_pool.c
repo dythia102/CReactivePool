@@ -14,26 +14,36 @@ typedef struct {
 // Allocator for Message
 static void* message_alloc(void* user_data) {
     (void)user_data; // Unused
-    Message* msg = malloc(sizeof(Message));
-    if (msg) {
-        msg->magic = 0xDEADBEEF;
-        msg->text[0] = '\0';
-        msg->id = 0;
+    // Allocate space for metadata + Message
+    void* block = malloc(sizeof(pool_object_metadata_t) + sizeof(Message));
+    if (!block) {
+        return NULL;
     }
+    // Return pointer to Message (after metadata)
+    void* msg = (char*)block + sizeof(pool_object_metadata_t);
+    Message* message = (Message*)msg;
+    message->magic = 0xDEADBEEF;
+    message->text[0] = '\0';
+    message->id = 0;
     return msg;
 }
 
 static void message_free(void* obj, void* user_data) {
     (void)user_data; // Unused
-    free(obj);
+    if (obj) {
+        // Free the entire block (metadata + Message)
+        free((char*)obj - sizeof(pool_object_metadata_t));
+    }
 }
 
 static void message_reset(void* obj, void* user_data) {
     (void)user_data; // Unused
     Message* msg = (Message*)obj;
-    msg->magic = 0xDEADBEEF;
-    msg->text[0] = '\0';
-    msg->id = 0;
+    if (msg) {
+        msg->magic = 0xDEADBEEF;
+        msg->text[0] = '\0';
+        msg->id = 0;
+    }
 }
 
 static bool message_validate(void* obj, void* user_data) {

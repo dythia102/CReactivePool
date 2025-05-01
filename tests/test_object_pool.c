@@ -13,18 +13,26 @@ typedef struct {
 
 static void* message_alloc(void* user_data) {
     (void)user_data; // Unused
-    Message* msg = malloc(sizeof(Message));
-    if (msg) {
-        msg->magic = 0xDEADBEEF;
-        msg->text[0] = '\0';
-        msg->id = 0;
+    // Allocate space for metadata + Message
+    void* block = malloc(sizeof(pool_object_metadata_t) + sizeof(Message));
+    if (!block) {
+        return NULL;
     }
+    // Return pointer to Message (after metadata)
+    void* msg = (char*)block + sizeof(pool_object_metadata_t);
+    Message* message = (Message*)msg;
+    message->magic = 0xDEADBEEF;
+    message->text[0] = '\0';
+    message->id = 0;
     return msg;
 }
 
 static void message_free(void* obj, void* user_data) {
     (void)user_data; // Unused
-    free(obj);
+    if (obj) {
+        // Free the entire block (metadata + Message)
+        free((char*)obj - sizeof(pool_object_metadata_t));
+    }
 }
 
 static void message_reset(void* obj, void* user_data) {
@@ -450,6 +458,32 @@ int main() {
             pool_release(pool, objects[i]);
         }
     }
+    pool_destroy(pool);
+
+    // Test 15: Fast object lookup in pool_release
+    reset_error_data(&error_data);
+    pool = pool_create(8, 4, allocator, error_callback, &error_data); // Larger pool for lookup test
+    // Acquire an object from a later sub-pool
+    Message* test_obj = NULL;
+    for (size_t i = 0; i < 8; i++) {
+        Message* tmp = pool_acquire(pool, NULL, NULL);
+        if (i == 7) { // Last object
+            test_obj = tmp;
+        }
+    }
+    assert_true("Acquire for lookup test", test_obj != NULL);
+    // Release the object (should use metadata for O(1) lookup)
+    assert_true("Fast release lookup", pool_release(pool, test_obj));
+    // Verify pool state
+    assert_true("Used count after fast release", pool_used_count(pool) == 7);
+    // Release remaining objects
+    for (size_t i = 0; i < 7; i++) {
+        Message* tmp = pool_acquire(pool, NULL, NULL);
+        if (tmp) {
+            pool_release(pool, tmp);
+        }
+    }
+    assert_true("All objects released", pool_used_count(pool) == 0);
     pool_destroy(pool);
 
     // Summary
