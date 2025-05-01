@@ -493,6 +493,41 @@ int main() {
     assert_true("All objects released", pool_used_count(pool) == 0 && released_count == 7);
     pool_destroy(pool);
 
+    // Test 16: Load balancing across sub-pools
+    reset_error_data(&error_data);
+    pool = pool_create(8, 4, allocator, error_callback, &error_data); // 8 objects, 4 sub-pools
+    // Spawn multiple threads to acquire and release objects
+    uv_thread_t load_threads[8];
+    thread_test_data_t load_thread_data[8];
+    for (int i = 0; i < 8; i++) {
+        load_thread_data[i].pool = pool;
+        load_thread_data[i].acquire_count = 50; // High contention
+        load_thread_data[i].success_count = 0;
+        uv_thread_create(&load_threads[i], thread_test_cb, &load_thread_data[i]);
+    }
+    for (int i = 0; i < 8; i++) {
+        uv_thread_join(&load_threads[i]);
+    }
+    // Check acquire counts across sub-pools
+    size_t sub_pool_count;
+    size_t* acquires = pool_get_sub_pool_acquire_counts(pool, &sub_pool_count);
+    assert_true("Acquire counts retrieved", acquires != NULL && sub_pool_count == 4);
+    size_t total_acquires = 0;
+    size_t min_acquires = SIZE_MAX;
+    size_t max_acquires = 0;
+    for (size_t i = 0; i < sub_pool_count; i++) {
+        total_acquires += acquires[i];
+        if (acquires[i] < min_acquires) min_acquires = acquires[i];
+        if (acquires[i] > max_acquires) max_acquires = acquires[i];
+    }
+    free(acquires);
+    // Verify balanced load (within 50% of average)
+    double avg_acquires = (double)total_acquires / sub_pool_count;
+    assert_true("Load balancing min", min_acquires >= avg_acquires * 0.5);
+    assert_true("Load balancing max", max_acquires <= avg_acquires * 1.5);
+    assert_true("Total acquires", total_acquires >= 8 * 50 * 0.8); // At least 80% success
+    pool_destroy(pool);
+
     // Summary
     printf("\nTests run: %d, Passed: %d, Failed: %d\n", test_count, test_passed, test_count - test_passed);
     return test_count == test_passed ? 0 : 1;

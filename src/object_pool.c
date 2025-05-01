@@ -42,6 +42,26 @@ struct object_pool {
     uv_mutex_t queue_mutex;       // Mutex for request_queue
 };
 
+// Thread-local random number generator state
+typedef struct {
+    uint64_t state;
+} thread_rng_t;
+
+static __thread thread_rng_t rng_state = {0};
+
+// Simple linear congruential generator (LCG) for thread-local random numbers
+static void init_rng(void) {
+    if (rng_state.state == 0) {
+        rng_state.state = uv_hrtime() ^ (uint64_t)uv_thread_self();
+    }
+}
+
+static uint32_t next_random(void) {
+    init_rng();
+    rng_state.state = rng_state.state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return (uint32_t)(rng_state.state >> 32);
+}
+
 // Helper to access metadata from user object pointer
 static inline pool_object_metadata_t* get_metadata(void* user_obj) {
     if (!user_obj) return NULL;
@@ -477,9 +497,10 @@ void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback,
         return NULL;
     }
 
-    // Try all sub-pools to maximize object acquisition
+    // Try all sub-pools in random order to balance load
+    size_t start_idx = next_random() % pool->sub_pool_count;
     for (size_t attempt = 0; attempt < pool->sub_pool_count; attempt++) {
-        size_t sub_idx = (uv_thread_self() + attempt) % pool->sub_pool_count;
+        size_t sub_idx = (start_idx + attempt) % pool->sub_pool_count;
         sub_pool_t* sub = &pool->sub_pools[sub_idx];
 
         uv_mutex_lock(&sub->mutex);
@@ -712,11 +733,31 @@ void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
     stats->queue_grow_count = pool->queue_grow_count;
 }
 
+size_t* pool_get_sub_pool_acquire_counts(object_pool_t* pool, size_t* count) {
+    if (!pool || !count) {
+        if (count) *count = 0;
+        return NULL;
+    }
+    size_t* acquires = malloc(pool->sub_pool_count * sizeof(size_t));
+    if (!acquires) {
+        report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate acquire counts array");
+        *count = 0;
+        return NULL;
+    }
+    *count = pool->sub_pool_count;
+    for (size_t i = 0; i < pool->sub_pool_count; i++) {
+        sub_pool_t* sub = &pool->sub_pools[i];
+        uv_mutex_lock(&sub->mutex);
+        acquires[i] = sub->acquire_count;
+        uv_mutex_unlock(&sub->mutex);
+    }
+    return acquires;
+}
+
 void pool_destroy(object_pool_t* pool) {
     if (!pool) {
         return;
     }
-
     for (size_t i = 0; i < pool->sub_pool_count; i++) {
         sub_pool_t* sub = &pool->sub_pools[i];
         for (size_t j = 0; j < sub->pool_size; j++) {

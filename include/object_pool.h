@@ -98,6 +98,9 @@ size_t pool_capacity(object_pool_t* pool);
 // Get pool usage statistics
 void pool_stats(object_pool_t* pool, object_pool_stats_t* stats);
 
+// Get acquire counts for each sub-pool (caller must free the returned array)
+size_t* pool_get_sub_pool_acquire_counts(object_pool_t* pool, size_t* count);
+
 // Destroy the pool and free all resources
 void pool_destroy(object_pool_t* pool);
 
