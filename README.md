@@ -26,6 +26,7 @@ A high-performance, thread-safe C library for managing reusable objects, optimiz
    examples/example_pool.c
    tests/test_object_pool.c
    docs/user_guide.md
+   docs/tutorial.md
    Makefile
    ```
 2. Build the library:
@@ -64,7 +65,8 @@ int main() {
 ```
 
 ## Documentation
-- **User Guide**: See `docs/user_guide.md` for detailed usage, advanced features, and performance tips.
+- **Tutorial**: See `TUTORIAL.md` for a step-by-step walkthrough of basic and advanced features.
+- **User Guide**: See `USERGUIDE.md` for detailed usage, advanced features, and performance tips.
 - **API Reference**: Generate Doxygen docs:
   ```bash
   doxygen -g - > Doxyfile
@@ -73,4 +75,4 @@ int main() {
   Open `docs/html/index.html` for function details.
 
 ## License
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

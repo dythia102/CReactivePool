@@ -2,7 +2,7 @@
 
 This tutorial walks you through using the Object Pool Library, a high-performance, thread-safe C library for managing reusable objects. You’ll learn how to create a pool, acquire and release objects, use custom allocators, handle backpressure, resize the pool, and monitor performance metrics. Each section includes compile-ready code snippets to get you started quickly.
 
-For a broader overview, see the [User Guide](user_guide.md). For API details, generate Doxygen docs (`doxygen Doxyfile`).
+For a broader overview, see the [User Guide](USER_GUIDE.md). For API details, generate Doxygen docs (`doxygen Doxyfile`).
 
 ## Prerequisites
 - **Compiler**: GCC or Clang with C11 support.
