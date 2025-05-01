@@ -2,7 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <uv.h>
+#include <pthread.h>
+#include <time.h>
 
 // Custom object: Message struct
 typedef struct {
@@ -131,7 +132,7 @@ typedef struct {
     int success_count;
 } thread_test_data_t;
 
-void thread_test_cb(void* arg) {
+void* thread_test_cb(void* arg) {
     thread_test_data_t* data = (thread_test_data_t*)arg;
     for (int i = 0; i < data->acquire_count; i++) {
         void* obj = pool_acquire(data->pool, NULL, NULL);
@@ -140,6 +141,7 @@ void thread_test_cb(void* arg) {
             pool_release(data->pool, obj);
         }
     }
+    return NULL;
 }
 
 // Backpressure stress test data
@@ -150,14 +152,15 @@ typedef struct {
     int context_id;
 } backpressure_test_data_t;
 
-void backpressure_acquire_cb(void* arg) {
+void* backpressure_acquire_cb(void* arg) {
     backpressure_test_data_t* data = (backpressure_test_data_t*)arg;
     for (int i = 0; i < data->acquire_attempts; i++) {
         pool_acquire(data->pool, acquire_callback, &data->acquire_data);
     }
+    return NULL;
 }
 
-void backpressure_release_cb(void* arg) {
+void* backpressure_release_cb(void* arg) {
     backpressure_test_data_t* data = (backpressure_test_data_t*)arg;
     for (int i = 0; i < data->acquire_attempts; i++) {
         void* obj = pool_acquire(data->pool, NULL, NULL);
@@ -165,6 +168,7 @@ void backpressure_release_cb(void* arg) {
             pool_release(data->pool, obj);
         }
     }
+    return NULL;
 }
 
 int main() {
@@ -270,16 +274,16 @@ int main() {
     // Test 6: Thread safety
     reset_error_data(&error_data);
     pool = pool_create(4, 2, allocator, error_callback, &error_data);
-    uv_thread_t threads[4];
+    pthread_t threads[4];
     thread_test_data_t thread_data[4];
     for (int i = 0; i < 4; i++) {
         thread_data[i].pool = pool;
         thread_data[i].acquire_count = 10;
         thread_data[i].success_count = 0;
-        uv_thread_create(&threads[i], thread_test_cb, &thread_data[i]);
+        pthread_create(&threads[i], NULL, thread_test_cb, &thread_data[i]);
     }
     for (int i = 0; i < 4; i++) {
-        uv_thread_join(&threads[i]);
+        pthread_join(threads[i], NULL);
     }
     int total_success = 0;
     for (int i = 0; i < 4; i++) {
@@ -371,7 +375,7 @@ int main() {
         assert_true("Exhaust pool for concurrent backpressure", backpressure_objects[i] != NULL);
     }
     // Spawn threads to enqueue and release
-    uv_thread_t backpressure_threads[6];
+    pthread_t backpressure_threads[6];
     backpressure_test_data_t backpressure_data[6];
     for (int i = 0; i < 4; i++) {
         backpressure_data[i].pool = pool;
@@ -383,7 +387,7 @@ int main() {
         backpressure_data[i].acquire_data.callback_objects_count = 0;
         backpressure_data[i].acquire_data.callback_objects_capacity = 15;
         backpressure_data[i].context_id = i + 1;
-        uv_thread_create(&backpressure_threads[i], backpressure_acquire_cb, &backpressure_data[i]);
+        pthread_create(&backpressure_threads[i], NULL, backpressure_acquire_cb, &backpressure_data[i]);
     }
     for (int i = 4; i < 6; i++) {
         backpressure_data[i].pool = pool;
@@ -395,15 +399,16 @@ int main() {
         backpressure_data[i].acquire_data.callback_objects_count = 0;
         backpressure_data[i].acquire_data.callback_objects_capacity = 10;
         backpressure_data[i].context_id = 0;
-        uv_thread_create(&backpressure_threads[i], backpressure_release_cb, &backpressure_data[i]);
+        pthread_create(&backpressure_threads[i], NULL, backpressure_release_cb, &backpressure_data[i]);
     }
     for (int i = 0; i < 6; i++) {
-        uv_thread_join(&backpressure_threads[i]);
+        pthread_join(backpressure_threads[i], NULL);
     }
     // Release held objects
     for (size_t i = 0; i < 2; i++) {
         if (backpressure_objects[i]) {
             pool_release(pool, backpressure_objects[i]);
+            backpressure_objects[i] = NULL;
         }
     }
     // Release callback-acquired objects
@@ -411,6 +416,7 @@ int main() {
         for (size_t j = 0; j < backpressure_data[i].acquire_data.callback_objects_count; j++) {
             if (backpressure_data[i].acquire_data.callback_objects[j]) {
                 pool_release(pool, backpressure_data[i].acquire_data.callback_objects[j]);
+                backpressure_data[i].acquire_data.callback_objects[j] = NULL;
             }
         }
         free(backpressure_data[i].acquire_data.callback_objects);
@@ -460,6 +466,7 @@ int main() {
     for (size_t i = 0; i < 3; i++) {
         if (objects[i]) {
             pool_release(pool, objects[i]);
+            objects[i] = NULL;
         }
     }
     pool_destroy(pool);
@@ -497,16 +504,16 @@ int main() {
     reset_error_data(&error_data);
     pool = pool_create(8, 4, allocator, error_callback, &error_data); // 8 objects, 4 sub-pools
     // Spawn multiple threads to acquire and release objects
-    uv_thread_t load_threads[8];
+    pthread_t load_threads[8];
     thread_test_data_t load_thread_data[8];
     for (int i = 0; i < 8; i++) {
         load_thread_data[i].pool = pool;
         load_thread_data[i].acquire_count = 50; // High contention
         load_thread_data[i].success_count = 0;
-        uv_thread_create(&load_threads[i], thread_test_cb, &load_thread_data[i]);
+        pthread_create(&load_threads[i], NULL, thread_test_cb, &load_thread_data[i]);
     }
     for (int i = 0; i < 8; i++) {
-        uv_thread_join(&load_threads[i]);
+        pthread_join(load_threads[i], NULL);
     }
     // Check acquire counts across sub-pools
     size_t sub_pool_count;

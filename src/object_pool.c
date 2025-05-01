@@ -3,7 +3,7 @@
  * @brief Implementation of a thread-safe object pool with dynamic resizing and load balancing.
  *
  * This file implements the object pool library defined in object_pool.h. The pool manages
- * reusable objects across multiple sub-pools for load balancing, using libuv mutexes for
+ * reusable objects across multiple sub-pools for load balancing, using POSIX mutexes for
  * thread safety. Key features include:
  * - O(1) object release via metadata.
  * - Random sub-pool selection in pool_acquire for reduced contention.
@@ -18,8 +18,10 @@
 
  #include "object_pool.h"
  #include <stdio.h>
- #include <string.h> // For memset
- #include <uv.h>
+ #include <string.h>   // For memset
+ #include <stdint.h>   // For uint64_t, uint32_t
+ #include <pthread.h>
+ #include <time.h>     // For clock_gettime
  
  /**
   * @brief Sub-pool structure for managing a subset of objects.
@@ -37,7 +39,7 @@
      size_t release_count;         // Total release operations
      size_t contention_attempts;   // Total mutex contention attempts
      uint64_t total_contention_time_ns; // Total mutex wait time
-     uv_mutex_t mutex;             // Mutex for thread safety
+     pthread_mutex_t mutex;        // Mutex for thread safety
  };
  
  /**
@@ -68,7 +70,7 @@
      object_pool_allocator_t allocator; // Allocator for objects
      object_pool_error_callback_t error_callback; // Error callback
      void* error_context;          // Error callback context
-     uv_mutex_t queue_mutex;       // Mutex for request_queue
+     pthread_mutex_t queue_mutex;  // Mutex for request_queue
  };
  
  /**
@@ -81,13 +83,27 @@
  static __thread thread_rng_t rng_state = {0};
  
  /**
+  * @brief Gets high-resolution time in nanoseconds.
+  *
+  * Uses clock_gettime for monotonic time.
+  * @return Nanoseconds since an unspecified epoch.
+  */
+ static uint64_t get_hrtime(void) {
+     struct timespec ts;
+     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+         return 0; // Fallback in case of error
+     }
+     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+ }
+ 
+ /**
   * @brief Initializes the thread-local random number generator.
   *
   * Seeds the generator with a combination of high-resolution time and thread ID.
   */
  static void init_rng(void) {
      if (rng_state.state == 0) {
-         rng_state.state = uv_hrtime() ^ (uint64_t)uv_thread_self();
+         rng_state.state = get_hrtime() ^ (uint64_t)pthread_self();
      }
  }
  
@@ -295,7 +311,7 @@
      if (!pool->allocator.on_destroy) pool->allocator.on_destroy = default_on_destroy;
      if (!pool->allocator.on_reuse) pool->allocator.on_reuse = default_on_reuse;
  
-     if (uv_mutex_init(&pool->queue_mutex) != 0) {
+     if (pthread_mutex_init(&pool->queue_mutex, NULL) != 0) {
          report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to initialize queue mutex");
          free(pool->request_queue);
          free(pool->sub_pools);
@@ -323,16 +339,16 @@
                  }
                  free(pool->sub_pools[j].objects);
                  free(pool->sub_pools[j].used);
-                 uv_mutex_destroy(&pool->sub_pools[j].mutex);
+                 pthread_mutex_destroy(&pool->sub_pools[j].mutex);
              }
              free(pool->sub_pools);
              free(pool->request_queue);
-             uv_mutex_destroy(&pool->queue_mutex);
+             pthread_mutex_destroy(&pool->queue_mutex);
              free(pool);
              return NULL;
          }
  
-         if (uv_mutex_init(&sub->mutex) != 0) {
+         if (pthread_mutex_init(&sub->mutex, NULL) != 0) {
              report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to initialize sub-pool mutex");
              for (size_t j = 0; j < i; j++) {
                  for (size_t k = 0; k < pool->sub_pools[j].pool_size; k++) {
@@ -342,11 +358,11 @@
                  }
                  free(pool->sub_pools[j].objects);
                  free(pool->sub_pools[j].used);
-                 uv_mutex_destroy(&pool->sub_pools[j].mutex);
+                 pthread_mutex_destroy(&pool->sub_pools[j].mutex);
              }
              free(pool->sub_pools);
              free(pool->request_queue);
-             uv_mutex_destroy(&pool->queue_mutex);
+             pthread_mutex_destroy(&pool->queue_mutex);
              free(pool);
              return NULL;
          }
@@ -375,13 +391,13 @@
                      }
                      free(pool->sub_pools[m].objects);
                      free(pool->sub_pools[m].used);
-                     uv_mutex_destroy(&pool->sub_pools[m].mutex);
+                     pthread_mutex_destroy(&pool->sub_pools[m].mutex);
                  }
                  free(sub->objects);
                  free(sub->used);
                  free(pool->sub_pools);
                  free(pool->request_queue);
-                 uv_mutex_destroy(&pool->queue_mutex);
+                 pthread_mutex_destroy(&pool->queue_mutex);
                  free(pool);
                  return NULL;
              }
@@ -402,13 +418,13 @@
                      }
                      free(pool->sub_pools[m].objects);
                      free(pool->sub_pools[m].used);
-                     uv_mutex_destroy(&pool->sub_pools[m].mutex);
+                     pthread_mutex_destroy(&pool->sub_pools[m].mutex);
                  }
                  free(sub->objects);
                  free(sub->used);
                  free(pool->sub_pools);
                  free(pool->request_queue);
-                 uv_mutex_destroy(&pool->queue_mutex);
+                 pthread_mutex_destroy(&pool->queue_mutex);
                  free(pool);
                  return NULL;
              }
@@ -491,16 +507,16 @@
          size_t add_size = base_add + (i < remainder ? 1 : 0);
          if (add_size == 0) continue;
  
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          sub->contention_attempts++;
-         uint64_t start_time = uv_hrtime();
+         uint64_t start_time = get_hrtime();
  
          void** new_objects = realloc(sub->objects, (sub->pool_size + add_size) * sizeof(void*));
          bool* new_used = realloc(sub->used, (sub->pool_size + add_size) * sizeof(bool));
          if (!new_objects || !new_used) {
              report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
-             uv_mutex_unlock(&sub->mutex);
-             sub->total_contention_time_ns += uv_hrtime() - start_time;
+             pthread_mutex_unlock(&sub->mutex);
+             sub->total_contention_time_ns += get_hrtime() - start_time;
              return false;
          }
  
@@ -510,8 +526,8 @@
              sub->objects[j] = pool->allocator.alloc(pool->allocator.user_data);
              if (!sub->objects[j]) {
                  report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate object");
-                 uv_mutex_unlock(&sub->mutex);
-                 sub->total_contention_time_ns += uv_hrtime() - start_time;
+                 pthread_mutex_unlock(&sub->mutex);
+                 sub->total_contention_time_ns += get_hrtime() - start_time;
                  return false;
              }
              // Initialize metadata
@@ -519,8 +535,8 @@
              if (!metadata) {
                  report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to access object metadata");
                  pool->allocator.free(sub->objects[j], pool->allocator.user_data);
-                 uv_mutex_unlock(&sub->mutex);
-                 sub->total_contention_time_ns += uv_hrtime() - start_time;
+                 pthread_mutex_unlock(&sub->mutex);
+                 sub->total_contention_time_ns += get_hrtime() - start_time;
                  return false;
              }
              metadata->sub_pool = sub;
@@ -530,8 +546,8 @@
              pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
          }
          sub->pool_size += add_size;
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
      }
  
      pool->total_objects_allocated += additional_size;
@@ -562,9 +578,9 @@
          size_t red_size = base_reduce + (i < remainder ? 1 : 0);
          if (red_size == 0) continue;
  
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          sub->contention_attempts++;
-         uint64_t start_time = uv_hrtime();
+         uint64_t start_time = get_hrtime();
  
          size_t unused_count = 0;
          for (size_t j = sub->pool_size; j > 0 && unused_count < red_size; j--) {
@@ -576,8 +592,8 @@
          }
          if (unused_count < red_size) {
              report_error(pool, POOL_ERROR_INSUFFICIENT_UNUSED, "Not enough unused objects to shrink");
-             uv_mutex_unlock(&sub->mutex);
-             sub->total_contention_time_ns += uv_hrtime() - start_time;
+             pthread_mutex_unlock(&sub->mutex);
+             sub->total_contention_time_ns += get_hrtime() - start_time;
              return false;
          }
  
@@ -596,8 +612,8 @@
              free(temp_objects);
              free(temp_used);
              report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
-             uv_mutex_unlock(&sub->mutex);
-             sub->total_contention_time_ns += uv_hrtime() - start_time;
+             pthread_mutex_unlock(&sub->mutex);
+             sub->total_contention_time_ns += get_hrtime() - start_time;
              return false;
          }
  
@@ -607,8 +623,8 @@
          if (sub->max_used > sub->pool_size) {
              sub->max_used = sub->pool_size;
          }
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
      }
  
      pool->shrink_count++;
@@ -629,11 +645,11 @@
          return false;
      }
  
-     uv_mutex_lock(&pool->queue_mutex);
+     pthread_mutex_lock(&pool->queue_mutex);
      size_t new_capacity = pool->queue_capacity + additional_capacity;
      acquire_request_t* new_queue = realloc(pool->request_queue, new_capacity * sizeof(acquire_request_t));
      if (!new_queue) {
-         uv_mutex_unlock(&pool->queue_mutex);
+         pthread_mutex_unlock(&pool->queue_mutex);
          report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to grow request queue");
          return false;
      }
@@ -642,7 +658,7 @@
      pool->request_queue = new_queue;
      pool->queue_capacity = new_capacity;
      pool->queue_grow_count++;
-     uv_mutex_unlock(&pool->queue_mutex);
+     pthread_mutex_unlock(&pool->queue_mutex);
      return true;
  }
  
@@ -670,9 +686,9 @@
          size_t sub_idx = (start_idx + attempt) % pool->sub_pool_count;
          sub_pool_t* sub = &pool->sub_pools[sub_idx];
  
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          sub->contention_attempts++;
-         uint64_t start_time = uv_hrtime();
+         uint64_t start_time = get_hrtime();
  
          if (sub->used_count < sub->pool_size) {
              for (size_t i = 0; i < sub->pool_size; i++) {
@@ -688,8 +704,8 @@
                      pool->allocator.reset(sub->objects[i], pool->allocator.user_data);
                      pool->allocator.on_reuse(sub->objects[i], pool->allocator.user_data);
                      void* obj = sub->objects[i];
-                     uv_mutex_unlock(&sub->mutex);
-                     sub->total_contention_time_ns += uv_hrtime() - start_time;
+                     pthread_mutex_unlock(&sub->mutex);
+                     sub->total_contention_time_ns += get_hrtime() - start_time;
                      // Update global max_used
                      size_t current_used = pool_used_count(pool);
                      if (current_used > pool->max_used) {
@@ -700,32 +716,32 @@
              }
          }
  
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
      }
  
      // Pool exhausted, try backpressure
      if (callback && pool->queue_size < pool->queue_capacity) {
-         uv_mutex_lock(&pool->queue_mutex);
+         pthread_mutex_lock(&pool->queue_mutex);
          if (pool->queue_size < pool->queue_capacity) {
              pool->request_queue[pool->queue_size++] = (acquire_request_t){callback, context};
              if (pool->queue_size > pool->queue_max_size) {
                  pool->queue_max_size = pool->queue_size;
              }
-             uv_mutex_unlock(&pool->queue_mutex);
+             pthread_mutex_unlock(&pool->queue_mutex);
              return NULL;
          }
-         uv_mutex_unlock(&pool->queue_mutex);
+         pthread_mutex_unlock(&pool->queue_mutex);
      }
  
      // Try to grow queue
      if (callback && pool_grow_queue(pool, pool->queue_capacity)) { // Double capacity
-         uv_mutex_lock(&pool->queue_mutex);
+         pthread_mutex_lock(&pool->queue_mutex);
          pool->request_queue[pool->queue_size++] = (acquire_request_t){callback, context};
          if (pool->queue_size > pool->queue_max_size) {
              pool->queue_max_size = pool->queue_size;
          }
-         uv_mutex_unlock(&pool->queue_mutex);
+         pthread_mutex_unlock(&pool->queue_mutex);
          return NULL;
      }
  
@@ -790,15 +806,15 @@
          return false;
      }
  
-     uv_mutex_lock(&sub->mutex);
+     pthread_mutex_lock(&sub->mutex);
      sub->contention_attempts++;
-     uint64_t start_time = uv_hrtime();
+     uint64_t start_time = get_hrtime();
  
      if (!pool->allocator.validate(object, pool->allocator.user_data)) {
          printf("DEBUG: Object validation failed: %p\n", object);
          report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object");
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
          return false;
      }
  
@@ -814,22 +830,22 @@
  
          // Process backpressure queue
          if (pool->queue_size > 0) {
-             uv_mutex_lock(&pool->queue_mutex);
+             pthread_mutex_lock(&pool->queue_mutex);
              if (pool->queue_size > 0) {
                  acquire_request_t req = pool->request_queue[0];
                  for (size_t i = 1; i < pool->queue_size; i++) {
                      pool->request_queue[i - 1] = pool->request_queue[i];
                  }
                  pool->queue_size--;
-                 uv_mutex_unlock(&pool->queue_mutex);
+                 pthread_mutex_unlock(&pool->queue_mutex);
                  if (req.callback && pool->allocator.validate(object, pool->allocator.user_data)) {
                      sub->used[obj_idx] = true;
                      sub->used_count++;
                      sub->acquire_count++;
                      pool->allocator.on_reuse(object, pool->allocator.user_data);
                      req.callback(object, req.context);
-                     uv_mutex_unlock(&sub->mutex);
-                     sub->total_contention_time_ns += uv_hrtime() - start_time;
+                     pthread_mutex_unlock(&sub->mutex);
+                     sub->total_contention_time_ns += get_hrtime() - start_time;
                      // Update global max_used after callback acquire
                      size_t current_used = pool_used_count(pool);
                      if (current_used > pool->max_used) {
@@ -838,19 +854,19 @@
                      return true;
                  }
              } else {
-                 uv_mutex_unlock(&pool->queue_mutex);
+                 pthread_mutex_unlock(&pool->queue_mutex);
              }
          }
  
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
          return true;
      }
  
      printf("DEBUG: Object %p already unused, sub->used[%zu]=%d\n", object, obj_idx, sub->used[obj_idx]);
      report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid or unused object");
-     uv_mutex_unlock(&sub->mutex);
-     sub->total_contention_time_ns += uv_hrtime() - start_time;
+     pthread_mutex_unlock(&sub->mutex);
+     sub->total_contention_time_ns += get_hrtime() - start_time;
      return false;
  }
  
@@ -868,12 +884,12 @@
      size_t total = 0;
      for (size_t i = 0; i < pool->sub_pool_count; i++) {
          sub_pool_t* sub = &pool->sub_pools[i];
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          sub->contention_attempts++;
-         uint64_t start_time = uv_hrtime();
+         uint64_t start_time = get_hrtime();
          total += sub->used_count;
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
      }
      return total;
  }
@@ -916,15 +932,15 @@
      stats->total_contention_time_ns = 0;
      for (size_t i = 0; i < pool->sub_pool_count; i++) {
          sub_pool_t* sub = &pool->sub_pools[i];
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          sub->contention_attempts++;
-         uint64_t start_time = uv_hrtime();
+         uint64_t start_time = get_hrtime();
          stats->acquire_count += sub->acquire_count;
          stats->release_count += sub->release_count;
          stats->contention_attempts += sub->contention_attempts;
          stats->total_contention_time_ns += sub->total_contention_time_ns;
-         uv_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += uv_hrtime() - start_time;
+         pthread_mutex_unlock(&sub->mutex);
+         sub->total_contention_time_ns += get_hrtime() - start_time;
      }
      stats->total_objects_allocated = pool->total_objects_allocated;
      stats->grow_count = pool->grow_count;
@@ -957,9 +973,9 @@
      *count = pool->sub_pool_count;
      for (size_t i = 0; i < pool->sub_pool_count; i++) {
          sub_pool_t* sub = &pool->sub_pools[i];
-         uv_mutex_lock(&sub->mutex);
+         pthread_mutex_lock(&sub->mutex);
          acquires[i] = sub->acquire_count;
-         uv_mutex_unlock(&sub->mutex);
+         pthread_mutex_unlock(&sub->mutex);
      }
      return acquires;
  }
@@ -987,11 +1003,11 @@
          }
          free(sub->objects);
          free(sub->used);
-         uv_mutex_destroy(&sub->mutex);
+         pthread_mutex_destroy(&sub->mutex);
      }
      free(pool->sub_pools);
      free(pool->request_queue);
-     uv_mutex_destroy(&pool->queue_mutex);
+     pthread_mutex_destroy(&pool->queue_mutex);
      free(pool->allocator.user_data); // Free user_data (object_size_ptr)
      free(pool);
  }

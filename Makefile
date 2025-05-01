@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Iinclude
-LDFLAGS = -luv
+LDFLAGS = -pthread
 
 # Source and object files
 SRC = src/object_pool.c

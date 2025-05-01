@@ -11,7 +11,7 @@
  * - O(1) object release using metadata.
  * - Random sub-pool selection for load balancing in multi-threaded environments.
  *
- * All operations are thread-safe using libuv mutexes. The library is designed for high-performance
+ * All operations are thread-safe using POSIX mutexes. The library is designed for high-performance
  * applications, with optimizations for low memory usage and minimal contention.
  */
 
@@ -20,7 +20,8 @@
  
  #include <stdlib.h>
  #include <stdbool.h>
- #include <uv.h> // For uv_mutex_t
+ #include <stdint.h>   // For uint64_t, uint32_t
+ #include <pthread.h>  // For pthread_mutex_t
  
  #define DEFAULT_POOL_SIZE 16
  #define DEFAULT_SUB_POOL_COUNT 4
