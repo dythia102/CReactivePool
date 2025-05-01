@@ -44,6 +44,7 @@ struct object_pool {
 
 // Helper to access metadata from user object pointer
 static inline pool_object_metadata_t* get_metadata(void* user_obj) {
+    if (!user_obj) return NULL;
     return (pool_object_metadata_t*)((char*)user_obj - sizeof(pool_object_metadata_t));
 }
 
@@ -55,10 +56,13 @@ static void* default_alloc(void* user_data) {
     if (!block) {
         return NULL;
     }
+    // Initialize metadata to safe defaults
+    pool_object_metadata_t* metadata = (pool_object_metadata_t*)block;
+    metadata->sub_pool = NULL;
+    metadata->index = 0;
     // Initialize user object to zero
     void* user_obj = (char*)block + sizeof(pool_object_metadata_t);
     memset(user_obj, 0, object_size);
-    // Metadata will be set by caller
     return user_obj;
 }
 
@@ -179,10 +183,13 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate sub-pool arrays");
             for (size_t j = 0; j < i; j++) {
                 for (size_t k = 0; k < pool->sub_pools[j].pool_size; k++) {
-                    pool->allocator.free(pool->sub_pools[j].objects[k], pool->allocator.user_data);
+                    if (pool->sub_pools[j].objects[k]) {
+                        pool->allocator.free(pool->sub_pools[j].objects[k], pool->allocator.user_data);
+                    }
                 }
                 free(pool->sub_pools[j].objects);
                 free(pool->sub_pools[j].used);
+                uv_mutex_destroy(&pool->sub_pools[j].mutex);
             }
             free(pool->sub_pools);
             free(pool->request_queue);
@@ -195,7 +202,9 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             report_error(NULL, POOL_ERROR_ALLOCATION_FAILED, "Failed to initialize sub-pool mutex");
             for (size_t j = 0; j < i; j++) {
                 for (size_t k = 0; k < pool->sub_pools[j].pool_size; k++) {
-                    pool->allocator.free(pool->sub_pools[j].objects[k], pool->allocator.user_data);
+                    if (pool->sub_pools[j].objects[k]) {
+                        pool->allocator.free(pool->sub_pools[j].objects[k], pool->allocator.user_data);
+                    }
                 }
                 free(pool->sub_pools[j].objects);
                 free(pool->sub_pools[j].used);
@@ -220,11 +229,15 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             if (!sub->objects[j]) {
                 report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to allocate object");
                 for (size_t k = 0; k < j; k++) {
-                    pool->allocator.free(sub->objects[k], pool->allocator.user_data);
+                    if (sub->objects[k]) {
+                        pool->allocator.free(sub->objects[k], pool->allocator.user_data);
+                    }
                 }
                 for (size_t m = 0; m < i; m++) {
                     for (size_t n = 0; n < pool->sub_pools[m].pool_size; n++) {
-                        pool->allocator.free(pool->sub_pools[m].objects[n], pool->allocator.user_data);
+                        if (pool->sub_pools[m].objects[n]) {
+                            pool->allocator.free(pool->sub_pools[m].objects[n], pool->allocator.user_data);
+                        }
                     }
                     free(pool->sub_pools[m].objects);
                     free(pool->sub_pools[m].used);
@@ -240,6 +253,31 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
             }
             // Initialize metadata
             pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+            if (!metadata) {
+                report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to access object metadata");
+                for (size_t k = 0; k < j; k++) {
+                    if (sub->objects[k]) {
+                        pool->allocator.free(sub->objects[k], pool->allocator.user_data);
+                    }
+                }
+                for (size_t m = 0; m < i; m++) {
+                    for (size_t n = 0; n < pool->sub_pools[m].pool_size; n++) {
+                        if (pool->sub_pools[m].objects[n]) {
+                            pool->allocator.free(pool->sub_pools[m].objects[n], pool->allocator.user_data);
+                        }
+                    }
+                    free(pool->sub_pools[m].objects);
+                    free(pool->sub_pools[m].used);
+                    uv_mutex_destroy(&pool->sub_pools[m].mutex);
+                }
+                free(sub->objects);
+                free(sub->used);
+                free(pool->sub_pools);
+                free(pool->request_queue);
+                uv_mutex_destroy(&pool->queue_mutex);
+                free(pool);
+                return NULL;
+            }
             metadata->sub_pool = sub;
             metadata->index = j;
             sub->used[j] = false;
@@ -321,13 +359,20 @@ bool pool_grow(object_pool_t* pool, size_t additional_size) {
             }
             // Initialize metadata
             pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+            if (!metadata) {
+                report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to access object metadata");
+                pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+                uv_mutex_unlock(&sub->mutex);
+                sub->total_contention_time_ns += uv_hrtime() - start_time;
+                return false;
+            }
             metadata->sub_pool = sub;
             metadata->index = j;
             sub->used[j] = false;
             pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
             pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
         }
-        sub->pool_size += add_size;
+        sub->pool_size = add_size;
         uv_mutex_unlock(&sub->mutex);
         sub->total_contention_time_ns += uv_hrtime() - start_time;
     }
@@ -371,8 +416,11 @@ bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
 
         size_t new_size = sub->pool_size - red_size;
         for (size_t j = new_size; j < sub->pool_size; j++) {
-            pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
-            pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+            if (sub->objects[j]) {
+                pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
+                pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+                sub->objects[j] = NULL; // Prevent double-free
+            }
         }
 
         void** temp_objects = realloc(sub->objects, new_size * sizeof(void*));
@@ -441,7 +489,7 @@ void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback,
         if (sub->used_count < sub->pool_size) {
             for (size_t i = 0; i < sub->pool_size; i++) {
                 if (!sub->used[i]) {
-                    if (!pool->allocator.validate(sub->objects[i], pool->allocator.user_data)) {
+                    if (!sub->objects[i] || !pool->allocator.validate(sub->objects[i], pool->allocator.user_data)) {
                         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object at index");
                         continue;
                     }
@@ -507,11 +555,15 @@ bool pool_release(object_pool_t* pool, void* object) {
 
     // Use metadata for O(1) lookup
     pool_object_metadata_t* metadata = get_metadata(object);
+    if (!metadata || !metadata->sub_pool) {
+        report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object metadata");
+        return false;
+    }
     sub_pool_t* sub = metadata->sub_pool;
     size_t obj_idx = metadata->index;
 
     // Validate sub-pool and index
-    if (!sub || obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
+    if (obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
         return false;
     }
@@ -638,8 +690,12 @@ void pool_destroy(object_pool_t* pool) {
     for (size_t i = 0; i < pool->sub_pool_count; i++) {
         sub_pool_t* sub = &pool->sub_pools[i];
         for (size_t j = 0; j < sub->pool_size; j++) {
-            pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
-            pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+            printf("DEBUG: Destroying object %zu in sub-pool %zu: %p\n", j, i, sub->objects[j]);
+            if (sub->objects[j]) {
+                pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
+                pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+                sub->objects[j] = NULL; // Prevent double-free
+            }
         }
         free(sub->objects);
         free(sub->used);

@@ -215,12 +215,14 @@ int main() {
 
     // Test 3: Pool exhaustion
     reset_error_data(&error_data);
-    Message* messages[5];
+    pool = pool_create(4, 2, allocator, error_callback, &error_data);
+    Message* messages[5] = { NULL };
     int acquired = 0;
     for (size_t i = 0; i < 5; i++) {
         messages[i] = pool_acquire(pool, NULL, NULL);
         if (messages[i]) {
             acquired++;
+            printf("DEBUG: Acquired object %zu: %p\n", i, messages[i]);
         }
     }
     assert_true("Acquire all objects", acquired == 4);
@@ -230,7 +232,9 @@ int main() {
     // Release all objects
     for (size_t i = 0; i < 4; i++) {
         if (messages[i]) {
+            printf("DEBUG: Releasing object %zu: %p\n", i, messages[i]);
             pool_release(pool, messages[i]);
+            messages[i] = NULL; // Prevent double-free
         }
     }
     assert_true("Used count after releasing all", pool_used_count(pool) == 0);
