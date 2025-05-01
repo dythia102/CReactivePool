@@ -467,27 +467,30 @@ int main() {
     // Test 15: Fast object lookup in pool_release
     reset_error_data(&error_data);
     pool = pool_create(8, 4, allocator, error_callback, &error_data); // Larger pool for lookup test
-    // Acquire an object from a later sub-pool
-    Message* test_obj = NULL;
+    // Acquire 8 objects and store them
+    Message* test_objects[8] = { NULL };
     for (size_t i = 0; i < 8; i++) {
-        Message* tmp = pool_acquire(pool, NULL, NULL);
-        if (i == 7) { // Last object
-            test_obj = tmp;
-        }
+        test_objects[i] = pool_acquire(pool, NULL, NULL);
+        printf("DEBUG: Acquired object %zu: %p\n", i, test_objects[i]);
+        assert_true("Acquire for lookup test", test_objects[i] != NULL);
     }
-    assert_true("Acquire for lookup test", test_obj != NULL);
-    // Release the object (should use metadata for O(1) lookup)
-    assert_true("Fast release lookup", pool_release(pool, test_obj));
+    // Release the last object (should use metadata for O(1) lookup)
+    printf("DEBUG: Releasing test object: %p\n", test_objects[7]);
+    assert_true("Fast release lookup", pool_release(pool, test_objects[7]));
+    test_objects[7] = NULL; // Prevent double-release
     // Verify pool state
     assert_true("Used count after fast release", pool_used_count(pool) == 7);
     // Release remaining objects
-    for (size_t i = 0; i < 7; i++) {
-        Message* tmp = pool_acquire(pool, NULL, NULL);
-        if (tmp) {
-            pool_release(pool, tmp);
+    size_t released_count = 0;
+    for (size_t i = 0; i < 8; i++) {
+        if (test_objects[i]) {
+            printf("DEBUG: Releasing object %zu: %p\n", i, test_objects[i]);
+            assert_true("Release remaining object", pool_release(pool, test_objects[i]));
+            released_count++;
+            test_objects[i] = NULL; // Prevent double-release
         }
     }
-    assert_true("All objects released", pool_used_count(pool) == 0);
+    assert_true("All objects released", pool_used_count(pool) == 0 && released_count == 7);
     pool_destroy(pool);
 
     // Summary

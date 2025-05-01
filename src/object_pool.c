@@ -372,7 +372,7 @@ bool pool_grow(object_pool_t* pool, size_t additional_size) {
             pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
             pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
         }
-        sub->pool_size = add_size;
+        sub->pool_size += add_size;
         uv_mutex_unlock(&sub->mutex);
         sub->total_contention_time_ns += uv_hrtime() - start_time;
     }
@@ -553,17 +553,41 @@ bool pool_release(object_pool_t* pool, void* object) {
         return false;
     }
 
+    // Check if object is a valid pool object by searching sub-pools
+    bool is_valid_object = false;
+    sub_pool_t* sub = NULL;
+    size_t obj_idx = 0;
+    for (size_t i = 0; i < pool->sub_pool_count; i++) {
+        for (size_t j = 0; j < pool->sub_pools[i].pool_size; j++) {
+            if (pool->sub_pools[i].objects[j] == object) {
+                is_valid_object = true;
+                sub = &pool->sub_pools[i];
+                obj_idx = j;
+                break;
+            }
+        }
+        if (is_valid_object) break;
+    }
+
+    if (!is_valid_object) {
+        printf("DEBUG: Invalid object pointer: %p\n", object);
+        report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
+        return false;
+    }
+
     // Use metadata for O(1) lookup
     pool_object_metadata_t* metadata = get_metadata(object);
     if (!metadata || !metadata->sub_pool) {
+        printf("DEBUG: Invalid metadata for object: %p\n", object);
         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object metadata");
         return false;
     }
-    sub_pool_t* sub = metadata->sub_pool;
-    size_t obj_idx = metadata->index;
+    sub = metadata->sub_pool;
+    obj_idx = metadata->index;
 
     // Validate sub-pool and index
     if (obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
+        printf("DEBUG: Metadata mismatch for object: %p\n", object);
         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
         return false;
     }
@@ -573,6 +597,7 @@ bool pool_release(object_pool_t* pool, void* object) {
     uint64_t start_time = uv_hrtime();
 
     if (!pool->allocator.validate(object, pool->allocator.user_data)) {
+        printf("DEBUG: Object validation failed: %p\n", object);
         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object");
         uv_mutex_unlock(&sub->mutex);
         sub->total_contention_time_ns += uv_hrtime() - start_time;
@@ -580,10 +605,14 @@ bool pool_release(object_pool_t* pool, void* object) {
     }
 
     if (sub->used[obj_idx]) {
+        printf("DEBUG: Releasing object %p, sub->used[%zu]=%d, used_count=%zu\n", 
+               object, obj_idx, sub->used[obj_idx], sub->used_count);
         sub->used[obj_idx] = false;
         sub->used_count--;
         sub->release_count++;
         pool->allocator.reset(object, pool->allocator.user_data);
+        printf("DEBUG: After release, sub->used[%zu]=%d, used_count=%zu\n", 
+               obj_idx, sub->used[obj_idx], sub->used_count);
 
         // Process backpressure queue
         if (pool->queue_size > 0) {
@@ -620,6 +649,7 @@ bool pool_release(object_pool_t* pool, void* object) {
         return true;
     }
 
+    printf("DEBUG: Object %p already unused, sub->used[%zu]=%d\n", object, obj_idx, sub->used[obj_idx]);
     report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid or unused object");
     uv_mutex_unlock(&sub->mutex);
     sub->total_contention_time_ns += uv_hrtime() - start_time;
@@ -690,7 +720,6 @@ void pool_destroy(object_pool_t* pool) {
     for (size_t i = 0; i < pool->sub_pool_count; i++) {
         sub_pool_t* sub = &pool->sub_pools[i];
         for (size_t j = 0; j < sub->pool_size; j++) {
-            printf("DEBUG: Destroying object %zu in sub-pool %zu: %p\n", j, i, sub->objects[j]);
             if (sub->objects[j]) {
                 pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
                 pool->allocator.free(sub->objects[j], pool->allocator.user_data);
