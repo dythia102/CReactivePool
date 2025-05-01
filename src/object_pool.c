@@ -9,7 +9,7 @@ typedef struct {
     bool* used;                   // Track object usage
     size_t pool_size;             // Number of objects in sub-pool
     size_t used_count;            // Number of used objects
-    size_t max_used;              // Max concurrent objects
+    size_t max_used;              // Max concurrent objects in this sub-pool
     size_t acquire_count;         // Total acquire operations
     size_t release_count;         // Total release operations
     size_t contention_attempts;   // Total mutex contention attempts
@@ -35,6 +35,7 @@ struct object_pool {
     size_t queue_capacity;        // Max queue size
     size_t queue_max_size;        // Max observed queue size
     size_t queue_grow_count;      // Number of queue growth operations
+    size_t max_used;              // Max concurrent objects across all sub-pools
     object_pool_allocator_t allocator; // Allocator for objects
     object_pool_error_callback_t error_callback; // Error callback
     void* error_context;          // Error callback context
@@ -133,6 +134,7 @@ object_pool_t* pool_create(size_t pool_size, size_t sub_pool_count, object_pool_
     pool->queue_capacity = DEFAULT_QUEUE_CAPACITY;
     pool->queue_max_size = 0;
     pool->queue_grow_count = 0;
+    pool->max_used = 0; // Initialize global max_used
     pool->allocator = allocator;
     pool->error_callback = error_callback;
     pool->error_context = error_context;
@@ -431,6 +433,11 @@ void* pool_acquire(object_pool_t* pool, object_pool_acquire_callback_t callback,
                     void* obj = sub->objects[i];
                     uv_mutex_unlock(&sub->mutex);
                     sub->total_contention_time_ns += uv_hrtime() - start_time;
+                    // Update global max_used
+                    size_t current_used = pool_used_count(pool);
+                    if (current_used > pool->max_used) {
+                        pool->max_used = current_used;
+                    }
                     return obj;
                 }
             }
@@ -530,6 +537,11 @@ bool pool_release(object_pool_t* pool, void* object) {
                     req.callback(object, req.context);
                     uv_mutex_unlock(&sub->mutex);
                     sub->total_contention_time_ns += uv_hrtime() - start_time;
+                    // Update global max_used after callback acquire
+                    size_t current_used = pool_used_count(pool);
+                    if (current_used > pool->max_used) {
+                        pool->max_used = current_used;
+                    }
                     return true;
                 }
             } else {
@@ -580,7 +592,7 @@ void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
     if (!pool || !stats) {
         return;
     }
-    stats->max_used = 0;
+    stats->max_used = pool->max_used; // Use global max_used
     stats->acquire_count = 0;
     stats->release_count = 0;
     stats->contention_attempts = 0;
@@ -590,7 +602,6 @@ void pool_stats(object_pool_t* pool, object_pool_stats_t* stats) {
         uv_mutex_lock(&sub->mutex);
         sub->contention_attempts++;
         uint64_t start_time = uv_hrtime();
-        stats->max_used += sub->max_used;
         stats->acquire_count += sub->acquire_count;
         stats->release_count += sub->release_count;
         stats->contention_attempts += sub->contention_attempts;

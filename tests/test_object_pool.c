@@ -428,6 +428,30 @@ int main() {
     assert_true("Stats queue_max_size", stats.queue_max_size == 0);
     pool_destroy(pool);
 
+    // Test 14: Max used statistics accuracy
+    reset_error_data(&error_data);
+    pool = pool_create(4, 2, allocator, error_callback, &error_data);
+    // Acquire 3 objects to create a global peak
+    Message* objects[3];
+    for (size_t i = 0; i < 3; i++) {
+        objects[i] = pool_acquire(pool, NULL, NULL);
+        assert_true("Acquire for max used test", objects[i] != NULL);
+    }
+    // Release and acquire to shift usage between sub-pools
+    pool_release(pool, objects[0]);
+    objects[0] = pool_acquire(pool, NULL, NULL);
+    assert_true("Re-acquire for max used test", objects[0] != NULL);
+    // Check stats
+    pool_stats(pool, &stats);
+    assert_true("Max used accuracy", stats.max_used == 3);
+    // Release objects
+    for (size_t i = 0; i < 3; i++) {
+        if (objects[i]) {
+            pool_release(pool, objects[i]);
+        }
+    }
+    pool_destroy(pool);
+
     // Summary
     printf("\nTests run: %d, Passed: %d, Failed: %d\n", test_count, test_passed, test_count - test_passed);
     return test_count == test_passed ? 0 : 1;

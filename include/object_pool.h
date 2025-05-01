@@ -42,7 +42,7 @@ typedef void (*object_pool_acquire_callback_t)(void* object, void* context);
 
 // Pool statistics
 typedef struct {
-    size_t max_used;               // Max concurrent objects used
+    size_t max_used;               // Max concurrent objects used across all sub-pools
     size_t acquire_count;          // Total acquire operations
     size_t release_count;          // Total release operations
     size_t contention_attempts;    // Total mutex contention attempts
