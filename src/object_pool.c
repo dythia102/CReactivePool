@@ -1,11 +1,11 @@
 /**
  * @file object_pool.c
- * @brief Implementation of a thread-safe object pool with dynamic resizing and load balancing.
+ * @brief Implementation of a thread-safe object pool with dynamic resizing and loadbalancing.
  *
  * This file implements the object pool library defined in object_pool.h. The pool manages
  * reusable objects across multiple sub-pools for load balancing, using POSIX mutexes for
  * thread safety. Key features include:
- * - O(1) object release via metadata.
+ * - O(1) object release via compact metadata.
  * - Random sub-pool selection in pool_acquire for reduced contention.
  * - Dynamic pool and queue resizing.
  * - Backpressure handling with callbacks.
@@ -122,12 +122,25 @@
  /**
   * @brief Retrieves metadata from a user object pointer.
   *
+  * @param pool The pool containing sub-pools.
   * @param user_obj The user object pointer.
-  * @return Pointer to the metadata, or NULL if user_obj is NULL.
+  * @param sub_pool Output pointer to the sub-pool.
+  * @param index Output index in sub-pool's objects array.
   */
- static inline pool_object_metadata_t* get_metadata(void* user_obj) {
-     if (!user_obj) return NULL;
-     return (pool_object_metadata_t*)((char*)user_obj - sizeof(pool_object_metadata_t));
+ static inline void get_metadata(object_pool_t* pool, void* user_obj, sub_pool_t** sub_pool, size_t* index) {
+     if (!user_obj || !pool) {
+         *sub_pool = NULL;
+         *index = 0;
+         return;
+     }
+     pool_object_metadata_t* metadata = (pool_object_metadata_t*)((char*)user_obj - sizeof(pool_object_metadata_t));
+     *index = metadata->packed & 0xFFFFFFFFFFFFULL; // Lower 48 bits
+     size_t sub_pool_id = metadata->packed >> 48; // Upper 16 bits
+     if (sub_pool_id >= pool->sub_pool_count) {
+         *sub_pool = NULL;
+         return;
+     }
+     *sub_pool = &pool->sub_pools[sub_pool_id];
  }
  
  /**
@@ -148,8 +161,7 @@
      }
      // Initialize metadata to safe defaults
      pool_object_metadata_t* metadata = (pool_object_metadata_t*)block;
-     metadata->sub_pool = NULL;
-     metadata->index = 0;
+     metadata->packed = 0;
      // Initialize user object to zero
      void* user_obj = (char*)block + sizeof(pool_object_metadata_t);
      memset(user_obj, 0, object_size);
@@ -270,6 +282,10 @@
          }
          return NULL;
      }
+     if (sub_pool_count > 0xFFFF) {
+         report_error(NULL, POOL_ERROR_INVALID_SIZE, "Sub-pool count exceeds 2^16");
+         return NULL;
+     }
  
      object_pool_t* pool = malloc(sizeof(object_pool_t));
      if (!pool) {
@@ -326,6 +342,24 @@
          sub->pool_size = base_size + (i < remainder ? 1 : 0);
          if (sub->pool_size == 0 && pool_size > 0) {
              sub->pool_size = 1; // Ensure at least one object per sub-pool if needed
+         }
+         if (sub->pool_size > 0xFFFFFFFFFFFFULL) {
+             report_error(NULL, POOL_ERROR_INVALID_SIZE, "Sub-pool size exceeds 2^48");
+             for (size_t j = 0; j < i; j++) {
+                 for (size_t k = 0; k < pool->sub_pools[j].pool_size; k++) {
+                     if (pool->sub_pools[j].objects[k]) {
+                         pool->allocator.free(pool->sub_pools[j].objects[k], pool->allocator.user_data);
+                     }
+                 }
+                 free(pool->sub_pools[j].objects);
+                 free(pool->sub_pools[j].used);
+                 pthread_mutex_destroy(&pool->sub_pools[j].mutex);
+             }
+             free(pool->sub_pools);
+             free(pool->request_queue);
+             pthread_mutex_destroy(&pool->queue_mutex);
+             free(pool);
+             return NULL;
          }
          sub->objects = malloc(sub->pool_size * sizeof(void*));
          sub->used = malloc(sub->pool_size * sizeof(bool));
@@ -402,7 +436,7 @@
                  return NULL;
              }
              // Initialize metadata
-             pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+             pool_object_metadata_t* metadata = (pool_object_metadata_t*)((char*)sub->objects[j] - sizeof(pool_object_metadata_t));
              if (!metadata) {
                  report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to access object metadata");
                  for (size_t k = 0; k < j; k++) {
@@ -428,8 +462,7 @@
                  free(pool);
                  return NULL;
              }
-             metadata->sub_pool = sub;
-             metadata->index = j;
+             metadata->packed = ((uint64_t)i << 48) | j; // sub_pool_id | index
              sub->used[j] = false;
              pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
              pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
@@ -511,6 +544,13 @@
          sub->contention_attempts++;
          uint64_t start_time = get_hrtime();
  
+         if (sub->pool_size + add_size > 0xFFFFFFFFFFFFULL) {
+             report_error(pool, POOL_ERROR_INVALID_SIZE, "Sub-pool size exceeds 2^48 after grow");
+             pthread_mutex_unlock(&sub->mutex);
+             sub->total_contention_time_ns += get_hrtime() - start_time;
+             return false;
+         }
+ 
          void** new_objects = realloc(sub->objects, (sub->pool_size + add_size) * sizeof(void*));
          bool* new_used = realloc(sub->used, (sub->pool_size + add_size) * sizeof(bool));
          if (!new_objects || !new_used) {
@@ -531,7 +571,7 @@
                  return false;
              }
              // Initialize metadata
-             pool_object_metadata_t* metadata = get_metadata(sub->objects[j]);
+             pool_object_metadata_t* metadata = (pool_object_metadata_t*)((char*)sub->objects[j] - sizeof(pool_object_metadata_t));
              if (!metadata) {
                  report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to access object metadata");
                  pool->allocator.free(sub->objects[j], pool->allocator.user_data);
@@ -539,8 +579,7 @@
                  sub->total_contention_time_ns += get_hrtime() - start_time;
                  return false;
              }
-             metadata->sub_pool = sub;
-             metadata->index = j;
+             metadata->packed = ((uint64_t)i << 48) | j; // sub_pool_id | index
              sub->used[j] = false;
              pool->allocator.reset(sub->objects[j], pool->allocator.user_data);
              pool->allocator.on_create(sub->objects[j], pool->allocator.user_data);
@@ -790,21 +829,16 @@
      }
  
      // Use metadata for O(1) lookup
-     pool_object_metadata_t* metadata = get_metadata(object);
-     if (!metadata || !metadata->sub_pool) {
+     sub_pool_t* metadata_sub = NULL;
+     size_t metadata_idx = 0;
+     get_metadata(pool, object, &metadata_sub, &metadata_idx);
+     if (!metadata_sub || metadata_idx >= metadata_sub->pool_size || metadata_sub->objects[metadata_idx] != object) {
          printf("DEBUG: Invalid metadata for object: %p\n", object);
          report_error(pool, POOL_ERROR_INVALID_OBJECT, "Invalid object metadata");
          return false;
      }
-     sub = metadata->sub_pool;
-     obj_idx = metadata->index;
- 
-     // Validate sub-pool and index
-     if (obj_idx >= sub->pool_size || sub->objects[obj_idx] != object) {
-         printf("DEBUG: Metadata mismatch for object: %p\n", object);
-         report_error(pool, POOL_ERROR_INVALID_OBJECT, "Object not in pool");
-         return false;
-     }
+     sub = metadata_sub;
+     obj_idx = metadata_idx;
  
      pthread_mutex_lock(&sub->mutex);
      sub->contention_attempts++;

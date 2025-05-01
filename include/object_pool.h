@@ -8,7 +8,7 @@
  * - Dynamic pool and queue resizing for scalability.
  * - Backpressure handling via callbacks for high-contention scenarios.
  * - Accurate statistics tracking (e.g., max usage, contention time).
- * - O(1) object release using metadata.
+ * - O(1) object release using compact metadata.
  * - Random sub-pool selection for load balancing in multi-threaded environments.
  *
  * All operations are thread-safe using POSIX mutexes. The library is designed for high-performance
@@ -32,8 +32,7 @@
   * @brief Metadata stored with each object for efficient lookup.
   */
  typedef struct {
-     struct sub_pool* sub_pool; // Pointer to owning sub-pool (opaque)
-     size_t index;              // Index in sub-pool's objects array
+     uint64_t packed; // Bits 0-47: index, 48-63: sub_pool_id
  } pool_object_metadata_t;
  
  /**

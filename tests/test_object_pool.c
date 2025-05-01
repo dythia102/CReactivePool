@@ -535,6 +535,45 @@ int main() {
     assert_true("Total acquires", total_acquires >= 8 * 50 * 0.8); // At least 80% success
     pool_destroy(pool);
 
+    // Test 17: Compact metadata correctness
+    reset_error_data(&error_data);
+    pool = pool_create(16, 8, allocator, error_callback, &error_data); // Larger pool to test metadata
+    Message* metadata_objects[16] = { NULL };
+    // Acquire all objects
+    for (size_t i = 0; i < 16; i++) {
+        metadata_objects[i] = pool_acquire(pool, NULL, NULL);
+        assert_true("Acquire for metadata test", metadata_objects[i] != NULL);
+    }
+    // Verify metadata by releasing and re-acquiring objects
+    bool metadata_correct = true;
+    for (size_t i = 0; i < 16; i++) {
+        if (!pool_release(pool, metadata_objects[i])) {
+            metadata_correct = false;
+            printf("DEBUG: Failed to release object %zu: %p\n", i, metadata_objects[i]);
+            break;
+        }
+        metadata_objects[i] = NULL;
+    }
+    // Re-acquire objects to ensure they are correctly managed
+    for (size_t i = 0; i < 16; i++) {
+        metadata_objects[i] = pool_acquire(pool, NULL, NULL);
+        if (!metadata_objects[i]) {
+            metadata_correct = false;
+            printf("DEBUG: Failed to re-acquire object %zu\n", i);
+            break;
+        }
+    }
+    assert_true("Compact metadata correctness", metadata_correct);
+    // Release all objects
+    for (size_t i = 0; i < 16; i++) {
+        if (metadata_objects[i]) {
+            pool_release(pool, metadata_objects[i]);
+            metadata_objects[i] = NULL;
+        }
+    }
+    assert_true("Used count after metadata test", pool_used_count(pool) == 0);
+    pool_destroy(pool);
+
     // Summary
     printf("\nTests run: %d, Passed: %d, Failed: %d\n", test_count, test_passed, test_count - test_passed);
     return test_count == test_passed ? 0 : 1;
