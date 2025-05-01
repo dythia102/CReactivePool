@@ -75,7 +75,7 @@ static void error_callback(object_pool_error_t error, const char* message, void*
 static void acquire_callback(void* object, void* context) {
     Message* msg = (Message*)object;
     printf("Acquired via callback: %p (context: %p)\n", object, context);
-    if (msg) {
+    if (msg && context) {
         strcpy(msg->text, "Backpressure");
         msg->id = *(int*)context;
         printf("Modified via callback: text=%s, id=%d\n", msg->text, msg->id);
@@ -143,7 +143,7 @@ int main() {
 
     // Test backpressure
     int callback_id = 3;
-    Message* held_objects[6];
+    Message* held_objects[6] = { NULL };
     size_t acquired_count = 0;
     for (size_t i = 0; i < 6; i++) {
         held_objects[i] = pool_acquire(pool, acquire_callback, &callback_id);
@@ -156,6 +156,7 @@ int main() {
     for (size_t i = 0; i < acquired_count; i++) {
         if (held_objects[i]) {
             pool_release(pool, held_objects[i]);
+            held_objects[i] = NULL;
         }
     }
 
