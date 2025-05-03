@@ -26,15 +26,17 @@ Below is the full list of test files for the object pool library, indicating whi
     - Tests the efficiency of object release using metadata for O(1) lookup.
 11. **test_reset_reuse.c**  
     - Ensures objects are properly reset when reused after release, with no memory leaks (verified with Valgrind).
+12. **test_grow.c**  
+    - Tests dynamic pool growth, ensuring new objects are correctly added and usable.
+13. **test_shrink.c**  
+    - Verifies pool shrinkage removes unused objects without affecting in-use objects.
+14. **test_load_balancing.c**  
+    - Ensures load balancing across sub-pools by checking acquire counts in a multi-threaded scenario.
 
 ## Test Files to Be Implemented
-1. **test_grow.c**  
-   - Tests dynamic pool growth, ensuring new objects are correctly added and usable.
-2. **test_shrink.c**  
-   - Verifies pool shrinkage removes unused objects without affecting in-use objects.
-3. **test_backpressure.c**  
-   - Tests backpressure handling when the pool is exhausted, including callback invocation.
-4. **test_concurrent_backpressure.c**  
-   - Verifies backpressure handling in a multi-threaded, high-contention environment.
-5. **test_load_balancing.c**  
-   - Ensures load balancing across sub-pools by checking acquire counts in a multi-threaded scenario.
+1. **test_backpressure.c**  
+   - Should test backpressure handling when the pool is exhausted, including callback invocation.
+2. **test_concurrent_backpressure.c**  
+   - Should verify backpressure handling in a multi-threaded, high-contention environment.
+
+**Note**: The pending test files (`test_backpressure.c` and `test_concurrent_backpressure.c`) will be addressed in future development to ensure comprehensive coverage of the object pool's features.

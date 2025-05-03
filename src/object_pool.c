@@ -607,70 +607,71 @@
   * @threadsafe
   */
  bool pool_shrink(object_pool_t* pool, size_t reduce_size) {
-     if (!pool || reduce_size == 0 || reduce_size > pool_capacity(pool)) {
-         report_error(pool, POOL_ERROR_INVALID_SIZE, "Invalid pool or size");
-         return false;
-     }
- 
-     size_t base_reduce = reduce_size / pool->sub_pool_count;
-     size_t remainder = reduce_size % pool->sub_pool_count;
-     for (size_t i = 0; i < pool->sub_pool_count; i++) {
-         sub_pool_t* sub = &pool->sub_pools[i];
-         size_t red_size = base_reduce + (i < remainder ? 1 : 0);
-         if (red_size == 0) continue;
- 
-         pthread_mutex_lock(&sub->mutex);
-         sub->contention_attempts++;
-         uint64_t start_time = get_hrtime();
- 
-         size_t unused_count = 0;
-         for (size_t j = sub->pool_size; j > 0 && unused_count < red_size; j--) {
-             if (!sub->used[j - 1]) {
-                 unused_count++;
-             } else {
-                 break;
-             }
-         }
-         if (unused_count < red_size) {
-             report_error(pool, POOL_ERROR_INSUFFICIENT_UNUSED, "Not enough unused objects to shrink");
-             pthread_mutex_unlock(&sub->mutex);
-             sub->total_contention_time_ns += get_hrtime() - start_time;
-             return false;
-         }
- 
-         size_t new_size = sub->pool_size - red_size;
-         for (size_t j = new_size; j < sub->pool_size; j++) {
-             if (sub->objects[j]) {
-                 pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
-                 pool->allocator.free(sub->objects[j], pool->allocator.user_data);
-                 sub->objects[j] = NULL; // Prevent double-free
-             }
-         }
- 
-         void** temp_objects = realloc(sub->objects, new_size * sizeof(void*));
-         bool* temp_used = realloc(sub->used, new_size * sizeof(bool));
-         if (!temp_objects || !temp_used) {
-             free(temp_objects);
-             free(temp_used);
-             report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
-             pthread_mutex_unlock(&sub->mutex);
-             sub->total_contention_time_ns += get_hrtime() - start_time;
-             return false;
-         }
- 
-         sub->objects = temp_objects;
-         sub->used = temp_used;
-         sub->pool_size = new_size;
-         if (sub->max_used > sub->pool_size) {
-             sub->max_used = sub->pool_size;
-         }
-         pthread_mutex_unlock(&sub->mutex);
-         sub->total_contention_time_ns += get_hrtime() - start_time;
-     }
- 
-     pool->shrink_count++;
-     return true;
- }
+    if (!pool || reduce_size == 0 || reduce_size > pool_capacity(pool)) {
+        report_error(pool, POOL_ERROR_INVALID_SIZE, "Invalid pool or size");
+        return false;
+    }
+
+    size_t base_reduce = reduce_size / pool->sub_pool_count;
+    size_t remainder = reduce_size % pool->sub_pool_count;
+    for (size_t i = 0; i < pool->sub_pool_count; i++) {
+        sub_pool_t* sub = &pool->sub_pools[i];
+        size_t red_size = base_reduce + (i < remainder ? 1 : 0);
+        if (red_size == 0) continue;
+
+        pthread_mutex_lock(&sub->mutex);
+        sub->contention_attempts++;
+        uint64_t start_time = get_hrtime();
+
+        size_t unused_count = 0;
+        for (size_t j = sub->pool_size; j > 0 && unused_count < red_size; j--) {
+            if (!sub->used[j - 1]) {
+                unused_count++;
+            } else {
+                break;
+            }
+        }
+        if (unused_count < red_size) {
+            report_error(pool, POOL_ERROR_INSUFFICIENT_UNUSED, "Not enough unused objects to shrink");
+            pthread_mutex_unlock(&sub->mutex);
+            sub->total_contention_time_ns += get_hrtime() - start_time;
+            return false;
+        }
+
+        size_t new_size = sub->pool_size - red_size;
+        for (size_t j = new_size; j < sub->pool_size; j++) {
+            if (sub->objects[j]) {
+                pool->allocator.on_destroy(sub->objects[j], pool->allocator.user_data);
+                pool->allocator.free(sub->objects[j], pool->allocator.user_data);
+                sub->objects[j] = NULL;
+            }
+        }
+
+        void** temp_objects = realloc(sub->objects, new_size * sizeof(void*));
+        bool* temp_used = realloc(sub->used, new_size * sizeof(bool));
+        if (!temp_objects || !temp_used) {
+            free(temp_objects);
+            free(temp_used);
+            report_error(pool, POOL_ERROR_ALLOCATION_FAILED, "Failed to reallocate sub-pool arrays");
+            pthread_mutex_unlock(&sub->mutex);
+            sub->total_contention_time_ns += get_hrtime() - start_time;
+            return false;
+        }
+
+        sub->objects = temp_objects;
+        sub->used = temp_used;
+        sub->pool_size = new_size;
+        if (sub->max_used > sub->pool_size) {
+            sub->max_used = sub->pool_size;
+        }
+        pthread_mutex_unlock(&sub->mutex);
+        sub->total_contention_time_ns += get_hrtime() - start_time;
+    }
+
+    pool->shrink_count++;
+    pool->total_objects_allocated -= reduce_size; // Fix: Update total_objects_allocated
+    return true;
+}
  
  /**
   * @brief Grows the request queue for backpressure.
