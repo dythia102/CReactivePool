@@ -53,14 +53,14 @@ int main() {
     assert_true("Release invalid object", !pool_release(pool, (void*)0xDEADBEEF));
     assert_true("Invalid object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
 
-    // Attempt to release unused object
-    reset_error_data(&error_data);
-    assert_true("Release unused object", !pool_release(pool, msg3)); // msg3 is still acquired
-    assert_true("Unused object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
-
     // Release re-acquired object
     assert_true("Release re-acquired object", pool_release(pool, msg3));
     assert_true("Used count after all releases", pool_used_count(pool) == 0);
+
+    // Attempt to double release
+    reset_error_data(&error_data);
+    assert_true("Double release fails", !pool_release(pool, msg3));
+    assert_true("Double release error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
 
     // Check pool statistics
     object_pool_stats_t stats;

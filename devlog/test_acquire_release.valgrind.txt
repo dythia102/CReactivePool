@@ -1,9 +1,9 @@
-dythia@DYTHIAR9:/mnt/c/Users/dythia/Git/CReactivePool$ valgrind --leak-check=full ./bin/test_acquire_release 
-==88859== Memcheck, a memory error detector
-==88859== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
-==88859== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
-==88859== Command: ./bin/test_acquire_release
-==88859==
+valgrind --leak-check=full ./bin/test_acquire_release 
+==90430== Memcheck, a memory error detector
+==90430== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==90430== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==90430== Command: ./bin/test_acquire_release
+==90430==
 PASS: Pool creation
 PASS: Initial used count
 PASS: Acquire first object
@@ -21,18 +21,19 @@ PASS: Release second object
 PASS: Used count after second release
 PASS: Release invalid object
 PASS: Invalid object error
-FAIL: Release unused object
-FAIL: Unused object error
-FAIL: Release re-acquired object
+PASS: Release re-acquired object
 PASS: Used count after all releases
+PASS: Double release fails
+PASS: Double release error
 PASS: Acquire count
 PASS: Release count
 PASS: Max used
-==88859==
-==88859== HEAP SUMMARY:
-==88859==     in use at exit: 0 bytes in 0 blocks
-==88859==   total heap usage: 12 allocs, 12 frees, 2,196 bytes allocated
-==88859==
-==88859== All heap blocks were freed -- no leaks are possible
-==88859==
-==88859== For lists of detected and suppressed errors, rerun with: -s
+==90430== 
+==90430== HEAP SUMMARY:
+==90430==     in use at exit: 0 bytes in 0 blocks
+==90430==   total heap usage: 12 allocs, 12 frees, 2,196 bytes allocated
+==90430==
+==90430== All heap blocks were freed -- no leaks are possible
+==90430==
+==90430== For lists of detected and suppressed errors, rerun with: -s
+==90430== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
