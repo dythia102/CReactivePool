@@ -40,6 +40,7 @@ typedef struct {
     Message** callback_objects; // Array to store callback-acquired objects
     size_t callback_objects_count; // Number of callback objects
     size_t callback_objects_capacity; // Capacity of callback objects array
+    bool object_received;  // Tracks if any object was received
 } acquire_test_data_t;
 
 void reset_error_data(error_test_data_t* error_data);
