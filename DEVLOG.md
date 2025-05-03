@@ -32,11 +32,11 @@ Below is the full list of test files for the object pool library, indicating whi
     - Verifies pool shrinkage removes unused objects without affecting in-use objects.
 14. **test_load_balancing.c**  
     - Ensures load balancing across sub-pools by checking acquire counts in a multi-threaded scenario.
+15. **test_backpressure.c**  
+   - Should test backpressure handling when the pool is exhausted, including callback invocation.
 
 ## Test Files to Be Implemented
-1. **test_backpressure.c**  
-   - Should test backpressure handling when the pool is exhausted, including callback invocation.
-2. **test_concurrent_backpressure.c**  
+1. **test_concurrent_backpressure.c**  
    - Should verify backpressure handling in a multi-threaded, high-contention environment.
 
 **Note**: The pending test files (`test_backpressure.c` and `test_concurrent_backpressure.c`) will be addressed in future development to ensure comprehensive coverage of the object pool's features.
