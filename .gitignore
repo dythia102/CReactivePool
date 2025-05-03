@@ -19,3 +19,5 @@ aio
 bin/example_pool
 
 bin/test_object_pool
+
+bin/
