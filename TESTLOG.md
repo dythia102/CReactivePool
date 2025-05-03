@@ -147,3 +147,100 @@ If you’d like to enhance it further, you could consider testing edge cases lik
 --- 
 
 Let me know if you’d like me to tweak the test or analyze anything else!
+
+
+Thank you for sharing the updated `test_validation.c` file and its Valgrind output. Based on the provided information, your object pool library's validation mechanisms appear to be working correctly, and the memory management is robust. Here's a detailed response:
+
+---
+
+### Summary of the Update
+The updated `test_validation.c` file includes a series of test cases designed to verify the object pool library's validation functionality. The Valgrind output confirms that all tests passed successfully with no memory leaks or errors, indicating that the library is performing as expected.
+
+### Test Cases Analyzed
+The test cases in `test_validation.c` cover the following scenarios:
+1. **Pool Creation**: Successfully creates a pool with 4 objects and a block size of 2.
+2. **Acquiring a Valid Object**: Acquires an object (`msg1`) and verifies its validity using the allocator's `validate` function.
+3. **Releasing an Invalid Object**: Attempts to release a dummy object (not from the pool) and confirms the correct error (`POOL_ERROR_INVALID_OBJECT`) is triggered.
+4. **Releasing a Corrupted Object**: Acquires a valid object (`msg2`), corrupts its magic number, attempts to release it (expecting failure), restores the magic number, and successfully releases it.
+5. **Validating All Objects**: Acquires and releases all 4 objects in the pool, ensuring each is valid.
+6. **Cleanup**: Releases the first acquired object (`msg1`) and destroys the pool.
+
+### Valgrind Output Highlights
+- **Memory Usage**: 12 allocations and 12 frees, with 2,196 bytes allocated and fully deallocated.
+- **Leaks**: "All heap blocks were freed -- no leaks are possible."
+- **Errors**: "ERROR SUMMARY: 0 errors from 0 contexts."
+- **Test Results**: All `PASS` messages align with the test assertions, confirming correct behavior.
+
+### Conclusion
+The object pool library's validation mechanisms are functioning reliably for the tested scenarios. The clean Valgrind report and successful test outcomes provide strong confidence in the library's correctness and memory management.
+
+### Suggestions for Further Testing
+While the current tests are comprehensive, you might consider the following enhancements:
+- **Larger Pool Sizes**: Test scalability with a pool size greater than 4.
+- **Pool Exhaustion**: Verify behavior when all objects are acquired and no more are available.
+- **Multi-threaded Access**: Check the pool's response to concurrent access in a multi-threaded environment.
+
+For now, based on the provided update, you can proceed with confidence in the library's validation functionality.
+
+### Updated Code
+Here’s the full `test_validation.c` file as provided, unchanged, for reference:
+
+```x-csrc
+#include "common.h"
+#include <stdio.h>
+#include <stdbool.h>
+
+void assert_true(const char* test_name, bool condition) {
+    if (condition) {
+        printf("PASS: %s\n", test_name);
+    } else {
+        printf("FAIL: %s\n", test_name);
+    }
+}
+
+int main() {
+    error_test_data_t error_data;
+    reset_error_data(&error_data);
+    object_pool_t* pool = pool_create(4, 2, allocator, error_callback, &error_data);
+    assert_true("Pool creation", pool != NULL);
+
+    // Test acquiring a valid object
+    Message* msg1 = pool_acquire(pool, NULL, NULL);
+    assert_true("Acquire valid object", msg1 != NULL);
+    assert_true("Object is valid", allocator.validate(msg1, allocator.user_data));
+
+    // Test releasing an invalid object
+    Message dummy;
+    dummy.magic = 0xBADBAD;  // Invalid magic
+    reset_error_data(&error_data);
+    assert_true("Release invalid object", !pool_release(pool, &dummy));
+    assert_true("Invalid object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
+
+    // Test releasing a corrupted object
+    Message* msg2 = pool_acquire(pool, NULL, NULL);
+    assert_true("Acquire second object", msg2 != NULL);
+    msg2->magic = 0xBADBAD;  // Corrupt the magic number
+    reset_error_data(&error_data);
+    assert_true("Release corrupted object", !pool_release(pool, msg2));
+    assert_true("Corrupted object error", error_data.error_count > 0 && error_data.last_error == POOL_ERROR_INVALID_OBJECT);
+    // Restore magic number and release properly
+    msg2->magic = 0xDEADBEEF;
+    assert_true("Release after fixing", pool_release(pool, msg2));
+
+    // Test that all acquired objects are valid
+    for (size_t i = 0; i < 4; i++) {
+        Message* msg = pool_acquire(pool, NULL, NULL);
+        assert_true("Acquire valid object", msg != NULL);
+        assert_true("Object is valid", allocator.validate(msg, allocator.user_data));
+        pool_release(pool, msg);
+    }
+
+    // Release the first object
+    assert_true("Release first object", pool_release(pool, msg1));
+
+    pool_destroy(pool);
+    return 0;
+}
+```
+
+Let me know if you’d like assistance with additional tests or modifications!
