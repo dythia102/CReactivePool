@@ -6,31 +6,38 @@ LDFLAGS = -pthread
 SRC = src/object_pool.c
 OBJ = $(SRC:.c=.o)
 
+COMMON_SRC = tests/common.c
+COMMON_OBJ = $(COMMON_SRC:.c=.o)
+
 EXAMPLE_SRC = examples/example_pool.c
 EXAMPLE_OBJ = $(EXAMPLE_SRC:.c=.o)
 EXAMPLE_BIN = bin/example_pool
 
-TEST_SRC = tests/test_object_pool.c
-TEST_OBJ = $(TEST_SRC:.c=.o)
-TEST_BIN = bin/test_object_pool
+# Find all test source files
+TEST_SRCS = $(wildcard tests/test_*.c)
+TEST_BINS = $(patsubst tests/%.c, bin/%, $(TEST_SRCS))
 
 # Default target
-all: $(EXAMPLE_BIN) $(TEST_BIN)
+all: $(EXAMPLE_BIN) $(TEST_BINS)
 
 # Link example binary
 $(EXAMPLE_BIN): $(OBJ) $(EXAMPLE_OBJ)
 	$(CC) $(OBJ) $(EXAMPLE_OBJ) -o $@ $(LDFLAGS)
 
-# Link test binary
-$(TEST_BIN): $(OBJ) $(TEST_OBJ)
-	$(CC) $(OBJ) $(TEST_OBJ) -o $@ $(LDFLAGS)
+# Link each test binary
+bin/test_%: tests/test_%.o $(OBJ) $(COMMON_OBJ)
+	$(CC) $< $(OBJ) $(COMMON_OBJ) -o $@ $(LDFLAGS)
 
 # Compile source to object files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Compile common object
+$(COMMON_OBJ): $(COMMON_SRC)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Clean build artifacts
 clean:
-	rm -f $(OBJ) $(EXAMPLE_OBJ) $(TEST_OBJ) $(EXAMPLE_BIN) $(TEST_BIN)
+	rm -f $(OBJ) $(COMMON_OBJ) $(EXAMPLE_OBJ) tests/*.o bin/*
 
 .PHONY: all clean
