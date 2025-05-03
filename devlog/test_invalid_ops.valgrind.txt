@@ -1,0 +1,35 @@
+valgrind --leak-check=full ./bin/test_invalid_ops 
+==95994== Memcheck, a memory error detector
+==95994== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==95994== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==95994== Command: ./bin/test_invalid_ops
+==95994==
+Invalid pool
+PASS: Acquire from null pool returns NULL
+Invalid pool or object
+PASS: Release to null pool returns false
+PASS: Pool creation for release test
+PASS: Release null object returns false
+PASS: Error callback called for invalid object
+PASS: Error type is POOL_ERROR_INVALID_POOL
+PASS: Create with zero pool size returns NULL
+PASS: Error callback called for invalid size
+PASS: Error type is POOL_ERROR_INVALID_SIZE
+PASS: Create with zero sub-pool count returns NULL
+PASS: Error callback called for invalid sub-pool count
+PASS: Error type is POOL_ERROR_INVALID_SIZE
+PASS: Create with invalid allocator returns NULL
+PASS: Error callback called for invalid allocator
+PASS: Error type is POOL_ERROR_INVALID_SIZE
+Sub-pool count exceeds 2^16
+PASS: Create with excessive sub-pool count returns NULL
+PASS: Destroy null pool does not crash
+==95994== 
+==95994== HEAP SUMMARY:
+==95994==     in use at exit: 0 bytes in 0 blocks
+==95994==   total heap usage: 12 allocs, 12 frees, 2,196 bytes allocated
+==95994==
+==95994== All heap blocks were freed -- no leaks are possible
+==95994==
+==95994== For lists of detected and suppressed errors, rerun with: -s
+==95994== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

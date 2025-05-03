@@ -58,6 +58,9 @@ void message_on_reuse(void* obj, void* user_data) {
 void error_callback(object_pool_error_t error, const char* message, void* context) {
     error_test_data_t* data = (error_test_data_t*)context;
     data->error_count++;
+    if (error == POOL_ERROR_EXHAUSTED) {
+        data->exhaustion_count++;
+    }
     data->last_error = error;
     strncpy(data->last_message, message, sizeof(data->last_message) - 1);
     data->last_message[sizeof(data->last_message) - 1] = '\0';
@@ -80,6 +83,7 @@ void acquire_callback(void* object, void* context) {
 // Implement reset_error_data
 void reset_error_data(error_test_data_t* error_data) {
     error_data->error_count = 0;
+    error_data->exhaustion_count = 0;
     error_data->last_error = POOL_ERROR_NONE;
     error_data->last_message[0] = '\0';
 }

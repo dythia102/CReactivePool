@@ -1,0 +1,24 @@
+valgrind --leak-check=full ./bin/test_thread_safety 
+==98038== Memcheck, a memory error detector
+==98038== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==98038== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==98038== Command: ./bin/test_thread_safety
+==98038==
+PASS: Pool creation
+PASS: Initial capacity
+PASS: Initial used count
+PASS: Thread-safe acquire/release
+PASS: Final used count
+PASS: Only exhaustion errors
+PASS: Acquire count consistency
+PASS: Release count consistency
+PASS: Contention attempts recorded
+==98038== 
+==98038== HEAP SUMMARY:
+==98038==     in use at exit: 0 bytes in 0 blocks
+==98038==   total heap usage: 36 allocs, 36 frees, 5,592 bytes allocated
+==98038==
+==98038== All heap blocks were freed -- no leaks are possible
+==98038==
+==98038== For lists of detected and suppressed errors, rerun with: -s
+==98038== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

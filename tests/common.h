@@ -24,6 +24,7 @@ void message_on_reuse(void* obj, void* user_data);
 // Error callback test data
 typedef struct {
     int error_count;
+    int exhaustion_count;  // Track POOL_ERROR_EXHAUSTED errors
     object_pool_error_t last_error;
     char last_message[256];
 } error_test_data_t;
@@ -40,6 +41,9 @@ typedef struct {
     size_t callback_objects_count; // Number of callback objects
     size_t callback_objects_capacity; // Capacity of callback objects array
 } acquire_test_data_t;
+
+void reset_error_data(error_test_data_t* error_data);
+void error_callback(object_pool_error_t error, const char* message, void* context);
 
 // Declare acquire_callback
 void acquire_callback(void* object, void* context);

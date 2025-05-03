@@ -1,0 +1,68 @@
+valgrind --leak-check=full ./bin/test_reset_reuse 
+==99053== Memcheck, a memory error detector
+==99053== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==99053== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==99053== Command: ./bin/test_reset_reuse
+==99053==
+PASS: Pool creation
+PASS: Initial capacity
+PASS: Initial used count
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Acquire object
+PASS: Object id reset
+PASS: Object text reset
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Release object
+PASS: Final used count
+PASS: No unexpected errors
+==99053== 
+==99053== HEAP SUMMARY:
+==99053==     in use at exit: 0 bytes in 0 blocks
+==99053==   total heap usage: 12 allocs, 12 frees, 2,196 bytes allocated
+==99053==
+==99053== All heap blocks were freed -- no leaks are possible
+==99053==
+==99053== For lists of detected and suppressed errors, rerun with: -s
+==99053== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

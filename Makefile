@@ -40,4 +40,11 @@ $(COMMON_OBJ): $(COMMON_SRC)
 clean:
 	rm -f $(OBJ) $(COMMON_OBJ) $(EXAMPLE_OBJ) tests/*.o bin/*
 
+# New target to run all tests with Valgrind
+valgrind-tests:
+	@for test in bin/test_*; do \
+		echo "Running $$test with Valgrind..."; \
+		valgrind --leak-check=full ./$$test; \
+	done
+	
 .PHONY: all clean
