@@ -1,14 +1,18 @@
+# Compiler and flags
 CC = gcc
 CFLAGS = -Wall -Wextra -Iinclude
 LDFLAGS = -pthread
 
+# Add debug flags if DEBUG=1
+ifeq ($(DEBUG),1)
+CFLAGS += -g -DDEBUG
+endif
+
 # Source and object files
 SRC = src/object_pool.c
 OBJ = $(SRC:.c=.o)
-
 COMMON_SRC = tests/common.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
-
 EXAMPLE_SRC = examples/example_pool.c
 EXAMPLE_OBJ = $(EXAMPLE_SRC:.c=.o)
 EXAMPLE_BIN = bin/example_pool
@@ -46,5 +50,8 @@ valgrind-tests:
 		echo "Running $$test with Valgrind..."; \
 		valgrind --leak-check=full ./$$test; \
 	done
+
+debug:
+	$(MAKE) DEBUG=1 all
 	
 .PHONY: all clean
