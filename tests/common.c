@@ -1,6 +1,15 @@
 #include "common.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
+void assert_true(const char* test_name, bool condition) {
+    if (condition) {
+        printf("PASS: %s\n", test_name);
+    } else {
+        printf("FAIL: %s\n", test_name);
+    }
+}
 
 // Implement allocator functions
 void* message_alloc(void* user_data) {

@@ -55,4 +55,7 @@ void reset_error_data(error_test_data_t* error_data);
 // Global allocator
 extern object_pool_allocator_t allocator;
 
+// Declare assert_true function for test reporting
+void assert_true(const char* test_name, bool condition);
+
 #endif // COMMON_H

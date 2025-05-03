@@ -1,15 +1,8 @@
 #include "object_pool.h"
+#include "common.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
-
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
 
 void test_default_pool_with_size(size_t object_size, size_t expected_size) {
     object_pool_t* pool = pool_create_default_with_size(object_size);

@@ -1,6 +1,6 @@
 # Object Pool Library
 
-A high-performance, thread-safe C library for managing reusable objects, optimized for low-memory, multi-threaded applications. Built with `libuv` for robust synchronization, it offers dynamic resizing, backpressure handling, and load balancing.
+A high-performance, thread-safe C library for managing reusable objects, optimized for low-memory, multi-threaded applications. It offers dynamic resizing, backpressure handling, and load balancing.
 
 ## Features
 - **O(1) Object Release**: Constant-time release using metadata.
@@ -15,21 +15,11 @@ A high-performance, thread-safe C library for managing reusable objects, optimiz
 
 ### Prerequisites
 - **Compiler**: GCC or Clang with C11 support.
-- **Library**: `libuv` (`sudo apt-get install libuv1-dev` on Ubuntu).
 - **Build Tool**: Make.
 
 ### Installation
-1. Clone or download the repository:
-   ```
-   include/object_pool.h
-   src/object_pool.c
-   examples/example_pool.c
-   tests/test_object_pool.c
-   docs/user_guide.md
-   docs/tutorial.md
-   Makefile
-   ```
-2. Build the library:
+1. Clone the repository and navigate to the project directory.
+2. Build the library and tests:
    ```bash
    make all
    ```
@@ -41,7 +31,7 @@ A high-performance, thread-safe C library for managing reusable objects, optimiz
   ```
 - Run the tests:
   ```bash
-  ./bin/test_object_pool
+  make test
   ```
 
 ## Basic Usage
@@ -67,12 +57,6 @@ int main() {
 ## Documentation
 - **Tutorial**: See `TUTORIAL.md` for a step-by-step walkthrough of basic and advanced features.
 - **User Guide**: See `USERGUIDE.md` for detailed usage, advanced features, and performance tips.
-- **API Reference**: Generate Doxygen docs:
-  ```bash
-  doxygen -g - > Doxyfile
-  doxygen Doxyfile
-  ```
-  Open `docs/html/index.html` for function details.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

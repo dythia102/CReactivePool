@@ -95,15 +95,6 @@ void* acquire_thread(void* arg) {
     return NULL;
 }
 
-// Assert function
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
-
 int main() {
     error_test_data_t error_data;
     acquire_test_data_t acquire_data = {0};

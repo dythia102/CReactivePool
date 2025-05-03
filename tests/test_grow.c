@@ -3,14 +3,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
-
 void test_pool_grow(void) {
     // Initialize error data
     error_test_data_t error_data;

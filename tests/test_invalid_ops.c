@@ -2,14 +2,6 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
-
 int main() {
     error_test_data_t error_data;
     reset_error_data(&error_data);

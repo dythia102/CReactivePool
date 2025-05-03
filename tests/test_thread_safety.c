@@ -4,15 +4,6 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-// Assertion function for test reporting
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
-
 // Thread data structure
 typedef struct {
     object_pool_t* pool;

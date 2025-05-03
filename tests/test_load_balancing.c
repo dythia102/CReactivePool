@@ -5,14 +5,6 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-void assert_true(const char* test_name, bool condition) {
-    if (condition) {
-        printf("PASS: %s\n", test_name);
-    } else {
-        printf("FAIL: %s\n", test_name);
-    }
-}
-
 // Assuming this is part of your original code based on pthread usage
 typedef struct {
     object_pool_t* pool;
